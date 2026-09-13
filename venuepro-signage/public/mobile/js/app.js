@@ -81,6 +81,7 @@ const actions = {
     await run(createLocation(name), 'Ubicación creada');
   },
   goLocations() { ui.route = 'locations'; render(); },
+  onvifSoon() { showToast('Canal ONVIF: próximamente'); },
   openLocation(id) { ui.currentLocationId = id; ui.route = 'locationDetail'; render(); },
 
   // -- emparejar --
@@ -448,10 +449,14 @@ function viewContent() {
     ${topbar('Contenido')}
     <div class="content">
       <div class="eyebrow">Biblioteca</div>
-      <label class="btn btn-ghost" style="display:block;text-align:center;margin-bottom:14px;cursor:pointer">
-        + Subir archivo (jpg, png, webp, mp4)
-        <input type="file" accept="image/jpeg,image/png,image/webp,video/mp4" style="display:none" data-change="pickUpload">
-      </label>
+      <div class="row" style="gap:8px;margin-bottom:14px">
+        <label class="btn btn-ghost" style="flex:1;text-align:center;cursor:pointer;font-size:12.5px">
+          + Subir archivo
+          <input type="file" accept="image/jpeg,image/png,image/webp,video/mp4" style="display:none" data-change="pickUpload">
+        </label>
+        <div class="row-tap" style="flex:1;text-align:center;padding:12px 0;border-radius:14px;background:var(--card-2);border:1px solid var(--line);opacity:.5;font:600 12.5px var(--sans)" ${A('onvifSoon')}>+ Canal ONVIF</div>
+      </div>
+      <div style="font:400 10.5px var(--mono);color:var(--ink-faint);margin:-8px 0 14px">Canal ONVIF: próximamente — necesita cambios en el backend real y en el reproductor.</div>
       <div class="grid-2" style="margin-bottom:20px">
         ${remote.assets.length === 0 ? `<div style="grid-column:1/-1;padding:24px 0;text-align:center;color:var(--ink-faint);font:400 12px var(--sans)">Sin archivos todavía.</div>` : remote.assets.map(a => `
         <div class="card" style="overflow:hidden">
