@@ -350,7 +350,11 @@ function deviceSheet() {
   return `<div class="backdrop" ${A('closeDevice')}></div>
   <div class="sheet" style="max-height:90vh">
     <div class="sheet-grip"></div>
-    <div class="row" style="gap:8px;margin-bottom:3px"><div class="dot" style="background:${STATUS_COLOR[status]}"></div><div style="font:700 19px var(--sans)">${esc(d.name)}</div></div>
+    <div class="row" style="gap:8px;margin-bottom:3px">
+      <div class="dot" style="background:${STATUS_COLOR[status]}"></div>
+      <div style="font:700 19px var(--sans);flex:1;min-width:0">${esc(d.name)}</div>
+      <div class="row-tap" title="Quitar pantalla" style="width:30px;height:30px;border-radius:9px;flex:none;display:flex;align-items:center;justify-content:center;background:rgba(242,99,90,.12)" ${A('revoke', d.id)}>🗑️</div>
+    </div>
     <div style="font:400 10.5px var(--mono);color:var(--ink-dimmer);margin-bottom:16px">${STATUS_LABEL[status]} · ${fmtTime(d.seen)}${d.error ? ' · ' + esc(d.error) : ''}</div>
 
     <div class="eyebrow">Lista asignada</div>
@@ -383,11 +387,10 @@ function deviceSheet() {
       </select>
     </div>
 
-    <div class="row" style="gap:8px;margin-bottom:10px">
+    <div class="row" style="gap:8px">
       <div class="btn btn-ghost row-tap" style="flex:1;padding:11px 0;font-size:12.5px" ${A('togglePause', d.id)}>${d.paused ? 'Reanudar' : 'Pausar'}</div>
       <div class="btn btn-ghost row-tap" style="flex:1;padding:11px 0;font-size:12.5px" ${A('syncNow', d.id)}>Sincronizar</div>
     </div>
-    <div class="btn btn-danger row-tap" style="padding:11px 0;font-size:12.5px" ${A('revoke', d.id)}>Quitar pantalla</div>
   </div>`;
 }
 
