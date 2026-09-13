@@ -337,7 +337,7 @@ function deviceRow(d) {
 }
 
 function previewThumb(a) {
-  const s = 'width:40px;height:40px;border-radius:9px;object-fit:cover;flex:none;background:#000';
+  const s = 'width:84px;aspect-ratio:16/9;border-radius:9px;object-fit:cover;flex:none;background:#000';
   return a.type.startsWith('image/')
     ? `<img src="${assetMediaUrl(a.id)}" style="${s}">`
     : `<video src="${assetMediaUrl(a.id)}#t=0.5" preload="metadata" muted playsinline style="${s}"></video>`;
