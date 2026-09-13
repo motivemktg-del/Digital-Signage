@@ -1,91 +1,43 @@
-# Desplegar en tu VPS de Hostinger
+# Cómo se despliega esto de verdad
 
-La app (`app/`) es HTML/CSS/JS estático — no hay build, no hay Node.js que
-mantener en el VPS. Se copian los archivos y Nginx los sirve.
+Este repo dejó de ser un mock estático — ahora trae el **backend real**
+(`venuepro-signage/`), que ya corre en tu VPS de Hostinger vía Docker +
+Traefik. Las instrucciones de "Nginx + Certbot" que había aquí antes ya
+no aplican (ese plan era para una app estática que no existe más).
 
-## 1. En tu VPS (Hostinger, Ubuntu)
+## Lo que ya está corriendo en tu VPS
 
-Conéctate por SSH (Hostinger te da el usuario/IP en el hPanel → VPS → detalles):
+- `https://ds.venueprocrm.cloud` — el backend + la interfaz original,
+  contenedor `venuepro-signage-signage-1`, gestionado por Docker Compose
+  en `/home/deploy/apps/venuepro-signage` (compose.yml, Traefik lo expone).
+- Mi interfaz nueva vive **dentro de ese mismo proyecto**, en
+  `venuepro-signage/public/mobile/` — no es un servicio aparte. Una vez
+  desplegado el proyecto normal, queda disponible en
+  `https://ds.venueprocrm.cloud/mobile/`, sin tocar la interfaz original
+  que sigue en `/`.
 
-```bash
-ssh root@TU_IP_DEL_VPS
-```
+## Para actualizar el VPS con lo de este repo
 
-Instala Nginx y Git si no los tienes:
-
-```bash
-apt update && apt install -y nginx git certbot python3-certbot-nginx
-```
-
-## 2. Trae el código desde GitHub
-
-```bash
-cd /var/www
-git clone https://github.com/TU_USUARIO/TU_REPO.git venuepro-signage
-```
-
-(Si el repo es privado, Hostinger te pedirá usuario/token de GitHub la
-primera vez, o configura una clave SSH de despliegue.)
-
-## 3. Configura Nginx
-
-Crea `/etc/nginx/sites-available/venuepro-signage`:
-
-```nginx
-server {
-    listen 80;
-    server_name TU_DOMINIO.com;           # o la IP si aún no tienes dominio
-    root /var/www/venuepro-signage/app;
-    index index.html;
-
-    location / {
-        try_files $uri $uri/ /index.html; # para que funcione la navegación interna
-    }
-}
-```
-
-Actívalo:
+El repositorio fuente real de `venuepro-signage/` es
+`motivemktg-del/html-front-crm`, rama `codex/saas-control-plane` (carpeta
+`DigitalSignage/`) — este repo (`Digital-Signage`) tiene una **copia** para
+poder trabajar sobre ella con Claude. Cuando quieras llevar cambios al VPS:
 
 ```bash
-ln -s /etc/nginx/sites-available/venuepro-signage /etc/nginx/sites-enabled/
-nginx -t && systemctl reload nginx
+# en el VPS
+cd /home/deploy/apps/dae-crm   # el checkout de la CRM, si ya existe ahí
+git pull origin codex/saas-control-plane
+bash deploy/update-digital-signage.sh
 ```
 
-## 4. HTTPS (recomendado, gratis)
+Eso instala la versión actualizada en `/home/deploy/apps/venuepro-signage`
+sin pedir setup interactivo (usa `install.sh --agency`). Ver
+`venuepro-signage/README.md` para el resto de rutas de despliegue
+(instalación nueva con `install.sh`, verificación con `install.sh --check`,
+backups de SQLite, etc.) — ya está todo documentado ahí por quien construyó
+el backend, no lo repito aquí.
 
-Si ya apuntaste un dominio/subdominio a la IP del VPS (esto se hace en
-Hostinger → Dominios → DNS, un registro `A` hacia la IP del VPS):
+## Multi-agencia / RTSP-ONVIF (fase 2)
 
-```bash
-certbot --nginx -d TU_DOMINIO.com
-```
-
-Certbot edita el `server{}` de arriba y renueva el certificado solo.
-
-## 5. Actualizar cuando cambies algo
-
-Manual, cada vez que quieras publicar cambios:
-
-```bash
-cd /var/www/venuepro-signage
-git pull origin main
-```
-
-## 6. (Opcional) Despliegue automático con GitHub Actions
-
-Si quieres que cada `git push` a `main` despliegue solo, dímelo y te dejo un
-workflow (`.github/workflows/deploy.yml`) que hace `ssh` al VPS y corre el
-`git pull` de arriba — solo necesitas guardar la IP del VPS y una clave SSH
-como "secrets" en GitHub (Settings → Secrets → Actions).
-
----
-
-## Nota sobre lo que es front-end y lo que no
-
-Esta app es el panel de control (front-end, con datos de ejemplo por
-ahora — ver los comentarios en `app/js/data.js`). El control real de
-capturadoras SDI/HDMI, cámaras PTZ (ONVIF/RTSP) y cualquier dispositivo
-ESP32/ESPHome del local necesita un **servidor local por ubicación** que
-sí esté en la LAN del restaurante — eso es trabajo de backend aparte, no
-algo que resuelva un sitio estático en el VPS. El VPS coordina; el
-servidor local de cada ubicación es quien de verdad abre esas conexiones.
+Ver `PLAYER_SPEC.md` — el módulo de fuentes en vivo (capturadoras SDI/HDMI,
+cámaras PTZ) es trabajo nuevo, no existe todavía en el backend real.

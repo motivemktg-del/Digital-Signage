@@ -1,0 +1,13 @@
+/* Shared VenuePro CRM palette: Frontend/crm-theme.css and revenue-shell.css. */
+:root{--bg:#0b0f19;--panel:#121826;--line:#263044;--text:#f4f6fb;--dim:#93a0b8;--faint:#93a0b8;--accent:#09b7ce;--bright:#09b7ce}
+body,main{background:var(--bg);color:var(--text)}aside,aside nav,dialog,.login-card{background:var(--panel)}
+button,input,select,textarea,.device-card,.location-row,.team-row{background:var(--panel);border-color:var(--line);color:var(--text)}
+nav button.active,nav button:hover,.location-row:hover{background:#09b7ce1a;color:var(--bright)}
+.primary{background:var(--accent);border-color:var(--accent);color:#071019}.primary:hover{background:#32c8db;color:#071019}
+.logo,.tenant-icon{background:#09b7ce26;color:var(--accent)}dialog p,label,.card p,.device-info p{color:var(--dim)}
+.device-visual,.screen-art,.media-thumb,.video-thumb{background:var(--panel)}
+.device-controls button{background:#121826d9;border-color:var(--line);color:var(--text)}#notice{background:#142535;border-color:#245064;color:var(--text)}
+.device-controls{flex-wrap:wrap;justify-content:flex-end;max-width:125px}.device-controls .send-content-button{width:100%;font-size:11px;padding:6px;min-height:36px}
+#sendPreview img,#sendPreview video{display:block;width:100%;max-height:240px;object-fit:contain;border-radius:10px;background:var(--bg)}
+#sendContentDialog{width:min(520px,calc(100vw - 24px));max-height:90dvh;overflow:auto}#sendContentDialog select{width:100%;min-width:0}#sendScreenName{overflow-wrap:anywhere;font-weight:600}#sendResult{color:var(--warn)}
+@media(max-width:600px){body,main{background:var(--bg)}aside nav{background:var(--panel);border-color:var(--line)}nav button.active{background:#09b7ce1a}.device-card,.location-row{background:var(--panel);border-color:var(--line)!important}.device-controls{max-width:110px}}

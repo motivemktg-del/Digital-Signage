@@ -5,13 +5,15 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Motive Signage</title>
 <meta name="theme-color" content="#0e0f12">
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Archivo:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<!-- Sin Google Fonts a propósito: la CSP real (server.js) no permite
+     hosts externos en style-src/font-src y no queremos tocar esa CSP.
+     styles.css usa pilas de fuentes del sistema en su lugar. -->
 <link rel="stylesheet" href="css/styles.css">
 </head>
 <body>
 <div id="app"></div>
+<!-- lo sirve el propio backend (server.js) para leer QR con la cámara -->
+<script src="/vendor/scanner.js" defer></script>
 <script src="js/data.js"></script>
 <script src="js/app.js"></script>
 </body>

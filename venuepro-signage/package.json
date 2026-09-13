@@ -1,0 +1,1 @@
+{"name":"venuepro-signage","private":true,"version":"0.1.0","type":"module","engines":{"node":">=24"},"scripts":{"start":"node --env-file-if-exists=.env server.js","test":"node --test test/*.test.js","tenant":"node --env-file-if-exists=.env tenant.js"},"dependencies":{"express":"4.21.1","qrcode":"1.5.4","html5-qrcode":"2.3.8"}}

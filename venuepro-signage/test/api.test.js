@@ -1,0 +1,75 @@
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import { mkdtemp,rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { createApp } from '../server.js';
+import { password } from '../store.js';
+
+test('Tenant isolation, QR lifecycle, media, publishing and offline schedule manifests',async()=>{
+ const dir=await mkdtemp(join(tmpdir(),'signage-test-'));const {app,db}=createApp({STORAGE_MODE:'local',PUBLIC_URL:'http://localhost:3080',DATA_DIR:dir});
+ const server=await new Promise(r=>{const s=app.listen(0,'127.0.0.1',()=>r(s));});const base='http://127.0.0.1:'+server.address().port;
+ async function req(path,{body,cookie,secret,method}={}){const r=await fetch(base+path,{method:method||(body===undefined?'GET':'POST'),headers:{...(body?{'Content-Type':'application/json'}:{}),...(cookie?{Cookie:cookie}:{}),...(secret?{Authorization:'Bearer '+secret}:{})},body:body?JSON.stringify(body):undefined});return {status:r.status,data:await r.json(),cookie:r.headers.get('set-cookie')?.split(';')[0]};}
+ try{
+  for(const id of ['a','b']){db.prepare('INSERT INTO tenants VALUES (?,?)').run(id,'Tenant '+id);db.prepare('INSERT INTO users (email,tenant,password) VALUES (?,?,?)').run(id+'@test.local',id,password('correct-password'));}
+  const a=(await req('/api/login',{body:{email:'a@test.local',password:'correct-password'}})).cookie,b=(await req('/api/login',{body:{email:'b@test.local',password:'correct-password'}})).cookie;
+  assert.equal((await req('/api/state')).status,401);
+  assert.equal((await req('/api/users',{cookie:a,body:{email:'viewer@test.local',password:'viewer-password-123',role:'viewer'}})).status,201);
+  const viewer=(await req('/api/login',{body:{email:'viewer@test.local',password:'viewer-password-123'}})).cookie;
+  assert.equal((await req('/api/state',{cookie:viewer})).status,200);assert.equal((await req('/api/locations',{cookie:viewer,body:{name:'Forbidden'}})).status,403);
+  assert.equal((await req('/api/users',{cookie:viewer})).status,403);assert.equal((await req('/api/users/a%40test.local',{cookie:a,body:{},method:'DELETE'})).status,409);
+  const location=(await req('/api/locations',{cookie:a,body:{name:'Pasadena'}})).data.id;
+  const pair=(await req('/api/pair/start',{body:{}})).data;assert.match(pair.qr,/^data:image\/png/);
+  assert.equal((await req('/api/player/manifest',{secret:pair.secret})).data.paired,false);
+  assert.equal((await req('/api/pair/claim',{cookie:a,body:{code:pair.code,name:'Recepción'}})).status,200);
+  assert.equal((await req('/api/devices/'+pair.id+'/sync',{cookie:viewer,body:{}})).status,403);
+  assert.equal((await req('/api/devices/'+pair.id+'/sync',{cookie:b,body:{}})).status,404);
+  assert.equal((await req('/api/devices/'+pair.id+'/location',{cookie:b,body:{location}})).status,404);
+  assert.equal((await req('/api/devices/'+pair.id+'/location',{cookie:a,body:{location}})).status,200);
+  assert.equal((await req('/api/pair/claim',{cookie:b,body:{code:pair.code,name:'Robada'}})).status,400);
+  assert.equal((await req('/api/state',{cookie:b})).data.devices.length,0);
+  const png=Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aK1sAAAAASUVORK5CYII=','base64');
+  const upload=await fetch(base+'/api/assets',{method:'POST',headers:{Cookie:a,'Content-Type':'image/png','X-File-Name':'welcome.png'},body:png});assert.equal(upload.status,201);const asset=(await upload.json()).id;
+  assert.equal((await fetch(base+'/api/assets/'+asset+'/media',{headers:{Cookie:b}})).status,404);
+  assert.equal((await req('/api/playlists',{cookie:b,body:{name:'Cross tenant',items:[{asset,seconds:5}]}})).status,400);
+  const p=(await req('/api/playlists',{cookie:a,body:{name:'Welcome',items:[{asset,seconds:5}]}})).data;
+  assert.equal((await req('/api/playlists/'+p.id+'/assets',{cookie:b,body:{asset}})).status,404);
+  assert.equal((await req('/api/playlists/'+p.id+'/assets',{cookie:viewer,body:{asset}})).status,403);
+  assert.equal((await req('/api/playlists/'+p.id+'/assets',{cookie:a,body:{asset}})).data.added,false);
+  const upload2=await fetch(base+'/api/assets',{method:'POST',headers:{Cookie:a,'Content-Type':'image/png','X-File-Name':'second.png'},body:png});const asset2=(await upload2.json()).id;
+  assert.equal((await req('/api/playlists/'+p.id+'/assets',{cookie:a,body:{asset:asset2}})).data.added,true);
+  assert.equal((await req('/api/playlists/'+p.id+'/assets',{cookie:a,body:{asset:'missing'}})).status,404);
+  const saved=JSON.parse(db.prepare('SELECT items FROM playlists WHERE id=?').get(p.id).items);
+  assert.deepEqual(saved,[{asset,seconds:5},{asset:asset2,seconds:10}]);
+  assert.equal((await req('/api/devices/'+pair.id+'/assign',{cookie:b,body:{playlist:p.id}})).status,404);
+  assert.equal((await req('/api/devices/'+pair.id+'/assign',{cookie:a,body:{playlist:p.id}})).status,200);
+  const initial=(await req('/api/player/manifest',{secret:pair.secret})).data;assert.equal(initial.items[0].size,png.length);
+  assert.deepEqual(initial.display,{orientation:'auto',rotation:0,fit:'cover'});
+  const display={orientation:'portrait',rotation:180,fit:'contain'};
+  assert.equal((await req('/api/devices/'+pair.id+'/display',{cookie:b,body:display})).status,404);
+  assert.equal((await req('/api/devices/'+pair.id+'/display',{cookie:viewer,body:display})).status,403);
+  for(const invalid of [{...display,rotation:45},{...display,fit:'stretch'},{...display,orientation:'invalid'}])assert.equal((await req('/api/devices/'+pair.id+'/display',{cookie:a,body:invalid})).status,400);
+  assert.equal((await req('/api/devices/'+pair.id+'/display',{cookie:a,body:display})).status,200);
+  const rotated=(await req('/api/player/manifest',{secret:pair.secret})).data;
+  assert.deepEqual(rotated.display,display);assert.notEqual(rotated.version,initial.version);
+  const settings=(await req('/api/state',{cookie:a})).data.devices[0];assert.equal(settings.orientation,'portrait');assert.equal(settings.rotation,180);assert.equal(settings.fit,'contain');
+  assert.equal((await req('/api/devices/'+pair.id+'/playback',{cookie:a,body:{paused:true}})).status,200);
+  assert.equal((await req('/api/player/manifest',{secret:pair.secret})).data.paused,true);
+  await req('/api/devices/'+pair.id+'/playback',{cookie:a,body:{paused:false}});
+  assert.equal((await req('/api/assets/'+asset,{cookie:a,body:{},method:'DELETE'})).status,409);
+  assert.equal((await req('/api/playlists/'+p.id,{cookie:a,body:{},method:'DELETE'})).status,409);
+  const schedule={name:'Morning',device:pair.id,playlist:p.id,days:[1,2,3,4,5],timezone:'America/Chicago',start:'08:00',end:'11:00',priority:2};
+  assert.equal((await req('/api/schedules',{cookie:b,body:schedule})).status,404);
+  assert.equal((await req('/api/schedules',{cookie:a,body:{...schedule,end:'07:00'}})).status,400);
+  assert.equal((await req('/api/schedules',{cookie:a,body:{...schedule,timezone:'Invalid/Zone'}})).status,400);
+  assert.equal((await req('/api/schedules',{cookie:a,body:{...schedule,fromDate:'2026-02-31'}})).status,400);
+  const scheduled=await req('/api/schedules',{cookie:a,body:schedule});assert.equal(scheduled.status,200);
+  const m=(await req('/api/player/manifest',{secret:pair.secret})).data;assert.notEqual(m.version,initial.version);assert.equal(m.schedules[0].items[0].sha,m.items[0].sha);
+  const bytes=await fetch(base+'/api/player/media/'+asset,{headers:{Authorization:'Bearer '+pair.secret}});assert.equal(bytes.status,200);assert.deepEqual(Buffer.from(await bytes.arrayBuffer()),png);
+  await req('/api/player/heartbeat',{secret:pair.secret,body:{version:m.version}});const state=(await req('/api/state',{cookie:a})).data;assert.equal(state.devices[0].version,state.devices[0].targetVersion);
+  assert.equal((await req('/api/schedules/'+scheduled.data.id,{cookie:b,body:{},method:'DELETE'})).status,404);
+  const expiry=(await req('/api/pair/start',{body:{}})).data;db.prepare('UPDATE devices SET expires=0 WHERE id=?').run(expiry.id);assert.equal((await req('/api/pair/claim',{cookie:a,body:{code:expiry.code,name:'Expired'}})).status,400);
+  assert.equal((await req('/api/devices/'+pair.id,{cookie:a,method:'DELETE',body:{}})).status,200);assert.equal((await req('/api/player/manifest',{secret:pair.secret})).status,401);assert.equal(db.prepare('SELECT COUNT(*) AS n FROM schedules').get().n,0);
+  const csrf=await fetch(base+'/api/playlists',{method:'POST',headers:{Cookie:a,Origin:'https://evil.invalid','Content-Type':'application/json'},body:'{}'});assert.equal(csrf.status,403);
+ }finally{await new Promise(r=>server.close(r));db.close();await rm(dir,{recursive:true,force:true});}
+});

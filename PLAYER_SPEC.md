@@ -1,9 +1,17 @@
 # Especificación del reproductor real (APK Motive Signage)
 
-Este documento describe qué tiene que hacer la app Android de verdad —
-la que corre en cada pantalla física — para que el panel de control
-(`app/`) deje de hablar con datos de ejemplo y hable con hardware real.
-No es código, es el contrato: mensajes, topics, protocolos.
+**Actualización:** el reproductor Android real ya existe —
+`venuepro-signage/android/` (`MainActivity.java` + `BootReceiver.java`).
+Ya hace pairing por QR, descarga y verifica media por SHA-256, reproduce
+imagen/video con orientación/ajuste configurables, y se registra como
+launcher `HOME` para volver solo tras reiniciar. Todo eso de este
+documento ya **no** aplica — quedó resuelto por el código real.
+
+Lo que sigue siendo nuevo (fase 2, no existe en el backend real) es la
+parte de **fuente en vivo**: capturadoras SDI/HDMI y cámaras PTZ por
+ONVIF/RTSP. Esta especificación ahora es solo el contrato para *eso* —
+el resto del documento describe la arquitectura de mensajes que tendría
+el módulo nuevo, no un reproductor desde cero.
 
 No lo puedo compilar aquí (este entorno no tiene Android SDK), así que
 esto es la base para escribirlo en Android Studio — por ti, por mí en
@@ -41,7 +49,11 @@ motive/{locationId}/server/heartbeat               → servidor local → VPS (c
 `server/heartbeat` es lo que alimenta el "en línea / sin conexión" y el
 `lastSeen` que ya se ve en la vista Clientes del panel.
 
-### Payloads (JSON), alineados con las funciones mock de `app/js/data.js`
+### Payloads (JSON) — nombres de función ilustrativos para el módulo nuevo
+(el mock original que usaba estos nombres, `sendPlayerCommand`/
+`sendPtzCommand`, ya no está en el repo — `venuepro-signage/public/mobile/`
+habla con la API real, sin fuente en vivo. Esto describe el módulo que
+falta construir.)
 
 ```jsonc
 // command a una pantalla (sendPlayerCommand)
@@ -86,8 +98,8 @@ resto de la app.
 - **Fallback sin ONVIF**: VISCA-over-IP, UDP puerto 52381, protocolo
   binario simple — impleméntalo aparte solo si aparece una cámara sin
   ONVIF real.
-- **Vídeo**: pide el RTSP de la cámara (`cam.rtsp` en `data.js`) — no
-  hace falta ONVIF para esto, es un stream RTSP normal.
+- **Vídeo**: pide el RTSP de la cámara directamente — no hace falta ONVIF
+  para esto, es un stream RTSP normal.
 
 ## 5. Vídeo en el reproductor — go2rtc + ExoPlayer
 
@@ -96,8 +108,9 @@ tanto en la pantalla física como en la previsualización del panel web:
 
 - Corre **go2rtc** en el servidor local de la ubicación (binario ARM vía
   Termux, o nativo si es un mini PC). Le das la URL RTSP y expone
-  WebRTC/MSE en el puerto 1984 — eso es lo que ya consume el panel web
-  (`cam.go2rtc` en `data.js`, ver `viewPtz` en `app.js`).
+  WebRTC/MSE en el puerto 1984 — el panel web del módulo nuevo consumiría
+  ese endpoint (aún no existe: `venuepro-signage/public/mobile/` de hoy
+  no tiene pantalla de PTZ, ver nota al principio de este documento).
 - En el reproductor Android, **ExoPlayer soporta RTSP nativo** desde la
   2.16 (`MediaItem.fromUri("rtsp://...")` con el módulo
   `media3-exoplayer-rtsp`) — no hace falta pasar por go2rtc si solo vas
