@@ -400,7 +400,9 @@ function viewContent() {
       <div class="grid-2" style="margin-bottom:20px">
         ${remote.assets.length === 0 ? `<div style="grid-column:1/-1;padding:24px 0;text-align:center;color:var(--ink-faint);font:400 12px var(--sans)">Sin archivos todavía.</div>` : remote.assets.map(a => `
         <div class="card" style="overflow:hidden">
-          ${a.type.startsWith('image/') ? `<img src="${assetMediaUrl(a.id)}" style="width:100%;aspect-ratio:16/9;object-fit:cover;display:block">` : `<div class="thumb"><span>vídeo</span></div>`}
+          ${a.type.startsWith('image/')
+            ? `<img src="${assetMediaUrl(a.id)}" style="width:100%;aspect-ratio:16/9;object-fit:cover;display:block;background:#000">`
+            : `<video src="${assetMediaUrl(a.id)}#t=0.5" preload="metadata" muted playsinline style="width:100%;aspect-ratio:16/9;object-fit:cover;display:block;background:#000"></video>`}
           <div style="padding:9px 10px">
             <div style="font:600 12px var(--sans);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;margin-bottom:6px">${esc(a.name)}</div>
             <div class="row" style="gap:6px">
