@@ -44,7 +44,11 @@ const CLIENTS = [
     locations: [
       {
         id: 'l1', name: 'Salón principal', city: 'Valencia',
-        localServer: { status: 'online', ip: '192.168.1.10', lastSeen: 'hace 8 s' },
+        // "device" es solo descriptivo — el servidor local no tiene por qué
+        // ser hardware aparte. Aquí es una de las propias tablets Android
+        // del local (con foreground service + Termux/go2rtc) haciendo de
+        // hub para las demás pantallas de esta ubicación.
+        localServer: { status: 'online', ip: '192.168.1.10', lastSeen: 'hace 8 s', device: 'Tablet Android · Barra 01 (hub)' },
         screens: [
           { id: 1, name: 'Barra 01', status: 'on', content: 'Señal en vivo · mezcla activa', source: 'live', encoderId: 'e1' },
           { id: 2, name: 'Salón TV', status: 'on', content: 'Carta del día', source: 'menu' },
@@ -83,7 +87,7 @@ const CLIENTS = [
       },
       {
         id: 'l4', name: 'Córner El Corte', city: 'Valencia',
-        localServer: { status: 'online', ip: '192.168.4.10', lastSeen: 'hace 22 s' },
+        localServer: { status: 'online', ip: '192.168.4.10', lastSeen: 'hace 22 s', device: 'Mini PC dedicado' },
         screens: [
           { id: 4, name: 'Caja 1', status: 'on', content: 'Promo cruzada', source: 'loop' },
           { id: 16, name: 'Pantalla 2', status: 'idle', content: 'Sin lista asignada', source: 'menu' }

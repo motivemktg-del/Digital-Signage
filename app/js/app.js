@@ -353,7 +353,7 @@ function locationRow(l) {
     ${open ? `<div style="padding:0 14px 14px">
       <div class="row" style="padding:9px 0;border-top:1px solid var(--line-soft);margin-bottom:2px">
         <div class="dot dot-sm" style="background:${srvOnline ? 'var(--green)' : 'var(--red)'}"></div>
-        <div style="flex:1;min-width:0;font:400 10.5px var(--mono);color:var(--ink-dimmer)">Servidor local ${srvOnline ? 'en línea' : 'sin conexión'} · ${esc(l.localServer.ip)} · ${esc(l.localServer.lastSeen)}</div>
+        <div style="flex:1;min-width:0;font:400 10.5px var(--mono);color:var(--ink-dimmer)">Servidor local ${srvOnline ? 'en línea' : 'sin conexión'} · ${esc(l.localServer.ip)} · ${esc(l.localServer.lastSeen)}${l.localServer.device ? ' · ' + esc(l.localServer.device) : ''}</div>
       </div>
       ${l.screens.map(s => `<div class="row row-tap" style="padding:9px 0;border-top:1px solid var(--line-soft)" ${A('openSource', s.id)}>
         <div style="width:3px;height:22px;border-radius:2px;flex:none;background:${STATUS_COLOR[s.status]}"></div>
