@@ -303,14 +303,27 @@ function viewLocations() {
 function deviceRow(d) {
   const status = deviceStatus(d);
   const playlist = remote.playlists.find(p => p.id === d.playlist);
+  // No es un preview EN VIVO de verdad (el player no manda capturas de
+  // pantalla) — es el primer archivo de la lista asignada, que es lo que
+  // debería estar mostrando la pantalla ahora mismo salvo que un horario
+  // esté activo encima.
+  const firstAsset = playlist && playlist.items[0] ? remote.assets.find(a => a.id === playlist.items[0].asset) : null;
   return `<div class="card row row-tap" style="padding:13px 14px" ${A('openDevice', d.id)}>
     <div class="dot" style="background:${STATUS_COLOR[status]}"></div>
     <div style="flex:1;min-width:0">
       <div style="font:600 13px var(--sans);margin-bottom:2px">${esc(d.name)}${d.paused ? ' · ⏸' : ''}</div>
       <div style="font:400 10.5px var(--mono);color:var(--ink-dimmer);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${playlist ? esc(playlist.name) : 'sin lista'} · ${fmtTime(d.seen)}</div>
     </div>
+    ${firstAsset ? previewThumb(firstAsset) : ''}
     <div style="color:var(--ink-faint);font:400 13px var(--sans)">›</div>
   </div>`;
+}
+
+function previewThumb(a) {
+  const s = 'width:40px;height:40px;border-radius:9px;object-fit:cover;flex:none;background:#000';
+  return a.type.startsWith('image/')
+    ? `<img src="${assetMediaUrl(a.id)}" style="${s}">`
+    : `<video src="${assetMediaUrl(a.id)}#t=0.5" preload="metadata" muted playsinline style="${s}"></video>`;
 }
 
 function deviceSheet() {
