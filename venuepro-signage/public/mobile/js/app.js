@@ -79,6 +79,7 @@ const actions = {
     const name = prompt('Nombre de la ubicación:'); if (!name) return;
     await run(createLocation(name), 'Ubicación creada');
   },
+  goLocations() { ui.route = 'locations'; render(); },
 
   // -- emparejar --
   // El código lo genera la PANTALLA (la TV/tablet llama a /api/pair/start
@@ -260,9 +261,12 @@ function viewHome() {
   return `<div class="screen">
     ${topbar('Pantallas')}
     <div class="content">
-      <div class="row" style="gap:8px;margin-bottom:16px">
+      <div class="row" style="gap:8px;margin-bottom:10px">
         <div class="btn btn-primary" style="flex:1;padding:12px 0;font-size:13px" ${A('startPairing')}>+ Emparejar pantalla</div>
-        <div class="btn btn-ghost" style="flex:none;padding:12px 16px;font-size:13px" ${A('addLocation')}>+ Ubicación</div>
+      </div>
+      <div class="row row-tap card-flat" style="padding:11px 13px;margin-bottom:16px" ${A('goLocations')}>
+        <div style="flex:1;min-width:0;font:500 12.5px var(--sans);color:var(--ink-dim)">📍 ${remote.locations.length} ubicacion${remote.locations.length === 1 ? '' : 'es'}</div>
+        <div style="color:var(--ink-faint);font:400 13px var(--sans)">›</div>
       </div>
       ${devices.length === 0 ? emptyState('Sin pantallas todavía', 'Empareja tu primera pantalla para empezar.') : groups.map(([loc, ds]) => `
         <div class="eyebrow">${esc(loc.name)} · ${ds.length}</div>
@@ -271,6 +275,27 @@ function viewHome() {
     </div>
     ${tabbar()}
     ${ui.detailDeviceId ? deviceSheet() : ''}
+    ${toastHtml()}
+  </div>`;
+}
+
+function viewLocations() {
+  const counts = new Map(remote.locations.map(l => [l.id, 0]));
+  for (const d of remote.devices) if (counts.has(d.location)) counts.set(d.location, counts.get(d.location) + 1);
+  return `<div class="screen">
+    <div class="topbar"><div class="back" ${A('goTab', 'home')}>‹</div><div class="title">Ubicaciones</div></div>
+    <div class="content">
+      ${remote.locations.length === 0 ? emptyState('Sin ubicaciones todavía', 'Agrega la primera para empezar a organizar tus pantallas.') : `<div class="stack" style="margin-bottom:16px">
+        ${remote.locations.map(l => `<div class="card row" style="padding:13px 14px">
+          <div style="flex:1;min-width:0">
+            <div style="font:600 13px var(--sans)">${esc(l.name)}</div>
+            <div style="font:400 10.5px var(--mono);color:var(--ink-dimmer)">${counts.get(l.id) || 0} pantalla${counts.get(l.id) === 1 ? '' : 's'}</div>
+          </div>
+        </div>`).join('')}
+      </div>`}
+      <div class="btn btn-ghost row-tap" ${A('addLocation')}>+ Añadir ubicación</div>
+      <div style="font:400 11px/1.5 var(--sans);color:var(--ink-faint);margin-top:14px">Por ahora solo se pueden crear ubicaciones aquí — renombrar o eliminar una todavía no lo soporta el backend.</div>
+    </div>
     ${toastHtml()}
   </div>`;
 }
@@ -560,6 +585,7 @@ function render() {
     case 'schedule': app.innerHTML = viewSchedule(); break;
     case 'team': app.innerHTML = viewTeam(); break;
     case 'pair': app.innerHTML = viewPair(); break;
+    case 'locations': app.innerHTML = viewLocations(); break;
     default: app.innerHTML = viewHome();
   }
 }
