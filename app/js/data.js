@@ -12,7 +12,8 @@
 //                         en la red del local, y el único punto que
 //                         sincroniza con el VPS. El VPS nunca habla
 //                         directo con hardware en la LAN del restaurante.
-//               ├─ Pantallas   media players (ej. la APK VenuePro)
+//               ├─ Pantallas   media players (ej. la APK Motive Signage,
+//                              paquete cloud.venueprocrm.signage)
 //               ├─ Capturadoras (encoders SDI/HDMI) — el servidor local
 //               │   les habla DIRECTO por la LAN (no hay vuelta al VPS
 //               │   para leer la señal ni para diagnosticar el hardware).

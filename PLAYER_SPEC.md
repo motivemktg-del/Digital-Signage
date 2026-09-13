@@ -1,4 +1,4 @@
-# Especificación del reproductor real (APK VenuePro)
+# Especificación del reproductor real (APK Motive Signage)
 
 Este documento describe qué tiene que hacer la app Android de verdad —
 la que corre en cada pantalla física — para que el panel de control
@@ -31,11 +31,11 @@ que hablaría un ESP32/ESPHome, así reusas el mismo broker).
 Topics sugeridos (ajusta al nombre real de tu backend):
 
 ```
-venuepro/{locationId}/screens/{screenId}/command   ← VPS → servidor local
-venuepro/{locationId}/screens/{screenId}/state      → servidor local → VPS
-venuepro/{locationId}/ptz/{camId}/command           ← VPS → servidor local
-venuepro/{locationId}/encoders/{encoderId}/state     → servidor local → VPS
-venuepro/{locationId}/server/heartbeat               → servidor local → VPS (cada 10-30s)
+motive/{locationId}/screens/{screenId}/command   ← VPS → servidor local
+motive/{locationId}/screens/{screenId}/state      → servidor local → VPS
+motive/{locationId}/ptz/{camId}/command           ← VPS → servidor local
+motive/{locationId}/encoders/{encoderId}/state     → servidor local → VPS
+motive/{locationId}/server/heartbeat               → servidor local → VPS (cada 10-30s)
 ```
 
 `server/heartbeat` es lo que alimenta el "en línea / sin conexión" y el
