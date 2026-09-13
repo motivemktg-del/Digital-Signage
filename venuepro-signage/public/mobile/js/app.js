@@ -8,6 +8,7 @@ const ui = {
   loginError: '',
   toast: null,
   detailDeviceId: null,
+  currentLocationId: null, // ubicación abierta en viewLocationDetail
   playlistDraft: null, // { id, name, items:[{asset,seconds}] } al crear/editar lista
   scheduleDraft: null, // objeto de horario al crear/editar
 };
@@ -80,6 +81,7 @@ const actions = {
     await run(createLocation(name), 'Ubicación creada');
   },
   goLocations() { ui.route = 'locations'; render(); },
+  openLocation(id) { ui.currentLocationId = id; ui.route = 'locationDetail'; render(); },
 
   // -- emparejar --
   // El código lo genera la PANTALLA (la TV/tablet llama a /api/pair/start
@@ -286,16 +288,31 @@ function viewLocations() {
     <div class="topbar"><div class="back" ${A('goTab', 'home')}>‹</div><div class="title">Ubicaciones</div></div>
     <div class="content">
       ${remote.locations.length === 0 ? emptyState('Sin ubicaciones todavía', 'Agrega la primera para empezar a organizar tus pantallas.') : `<div class="stack" style="margin-bottom:16px">
-        ${remote.locations.map(l => `<div class="card row" style="padding:13px 14px">
+        ${remote.locations.map(l => `<div class="card row row-tap" style="padding:13px 14px" ${A('openLocation', l.id)}>
           <div style="flex:1;min-width:0">
             <div style="font:600 13px var(--sans)">${esc(l.name)}</div>
             <div style="font:400 10.5px var(--mono);color:var(--ink-dimmer)">${counts.get(l.id) || 0} pantalla${counts.get(l.id) === 1 ? '' : 's'}</div>
           </div>
+          <div style="color:var(--ink-faint);font:400 13px var(--sans)">›</div>
         </div>`).join('')}
       </div>`}
       <div class="btn btn-ghost row-tap" ${A('addLocation')}>+ Añadir ubicación</div>
       <div style="font:400 11px/1.5 var(--sans);color:var(--ink-faint);margin-top:14px">Por ahora solo se pueden crear ubicaciones aquí — renombrar o eliminar una todavía no lo soporta el backend.</div>
     </div>
+    ${toastHtml()}
+  </div>`;
+}
+
+function viewLocationDetail() {
+  const loc = remote.locations.find(l => l.id === ui.currentLocationId);
+  if (!loc) { ui.route = 'locations'; return viewLocations(); }
+  const devices = remote.devices.filter(d => d.location === loc.id);
+  return `<div class="screen">
+    <div class="topbar"><div class="back" ${A('goLocations')}>‹</div><div class="title">${esc(loc.name)}</div></div>
+    <div class="content">
+      ${devices.length === 0 ? emptyState('Sin pantallas aquí todavía', 'Empareja una pantalla y elige esta ubicación, o mueve una existente desde su detalle.') : `<div class="stack">${devices.map(deviceRow).join('')}</div>`}
+    </div>
+    ${ui.detailDeviceId ? deviceSheet() : ''}
     ${toastHtml()}
   </div>`;
 }
@@ -599,6 +616,7 @@ function render() {
     case 'team': app.innerHTML = viewTeam(); break;
     case 'pair': app.innerHTML = viewPair(); break;
     case 'locations': app.innerHTML = viewLocations(); break;
+    case 'locationDetail': app.innerHTML = viewLocationDetail(); break;
     default: app.innerHTML = viewHome();
   }
 }
