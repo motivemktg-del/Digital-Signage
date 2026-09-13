@@ -570,8 +570,10 @@ function viewPtz() {
       <div style="font:400 10px var(--mono);color:var(--ink-faint);margin-bottom:12px">stream RTSP · ${esc(cam.rtsp)}</div>
 
       <div style="position:relative;aspect-ratio:16/9;border-radius:14px;overflow:hidden;background:repeating-linear-gradient(135deg,#242830 0 7px,#1c1f25 7px 14px);margin-bottom:7px">
-        <div style="position:absolute;inset:0;display:flex;align-items:center;justify-content:center;font:500 10px var(--mono);color:var(--ink-faint)">señal PTZ en directo</div>
-        <div style="position:absolute;top:50%;left:50%;width:${frameW};height:${frameW};border:1.5px solid rgba(47,123,246,.85);border-radius:6px;box-shadow:0 0 0 9999px rgba(14,15,18,.45);transform:translate(-50%,-50%) translate(${s.x}px,${s.y}px);transition:all .22s ease"></div>
+        ${cam.go2rtc && cam.go2rtc.host
+          ? `<iframe title="stream" src="http://${esc(cam.go2rtc.host)}/stream.html?src=${encodeURIComponent(cam.go2rtc.streamId)}&mode=webrtc,mse" style="position:absolute;inset:0;width:100%;height:100%;border:0" allow="autoplay"></iframe>`
+          : `<div style="position:absolute;inset:0;display:flex;align-items:center;justify-content:center;font:500 10px var(--mono);color:var(--ink-faint)">señal PTZ en directo · configura go2rtc en data.js</div>`}
+        <div style="position:absolute;top:50%;left:50%;width:${frameW};height:${frameW};border:1.5px solid rgba(47,123,246,.85);border-radius:6px;box-shadow:0 0 0 9999px rgba(14,15,18,.45);transform:translate(-50%,-50%) translate(${s.x}px,${s.y}px);transition:all .22s ease;pointer-events:none"></div>
         <div class="badge-live"><div class="dot dot-sm pulse" style="background:var(--red)"></div><span>EN DIRECTO</span></div>
         <div style="position:absolute;bottom:11px;right:11px;padding:4px 9px;border-radius:6px;background:rgba(14,15,18,.84);font:600 9.5px var(--mono);color:#c4c9cf">${s.zoom.toFixed(1)}×</div>
       </div>

@@ -61,15 +61,24 @@ const CLIENTS = [
           // "xAddr"), y pide el vídeo por RTSP aparte — son dos canales
           // distintos a la misma IP. Si algún día aparece una cámara sin
           // ONVIF, cae a "protocol: visca" (VISCA-over-IP, puerto 52381).
+          // go2rtc: null = sin configurar todavía → la vista PTZ dibuja el
+          // placeholder de siempre. Rellena "host" con la IP/dominio donde
+          // corre go2rtc en el servidor local de ESTA ubicación (puerto por
+          // defecto 1984) y "streamId" con el nombre que le diste al stream
+          // dentro de go2rtc.yaml (sección "streams:", normalmente el mismo
+          // valor que pegarías como fuente RTSP). Confirma los endpoints
+          // exactos contra tu versión de go2rtc antes de dar esto por
+          // bueno — han cambiado entre versiones.
           { id: 'c1', name: 'PTZ Escenario', status: 'live', protocol: 'onvif',
             onvif: { xAddr: 'http://192.168.1.41/onvif/device_service', profile: 'Profile S' },
-            rtsp: 'rtsp://192.168.1.41:554/stream1' },
+            rtsp: 'rtsp://192.168.1.41:554/stream1',
+            go2rtc: null /* { host: '192.168.1.10:1984', streamId: 'ptz_escenario' } */ },
           { id: 'c2', name: 'PTZ Cocina', status: 'live', protocol: 'onvif',
             onvif: { xAddr: 'http://192.168.1.42/onvif/device_service', profile: 'Profile S' },
-            rtsp: 'rtsp://192.168.1.42:554/stream1' },
+            rtsp: 'rtsp://192.168.1.42:554/stream1', go2rtc: null },
           { id: 'c3', name: 'PTZ Terraza', status: 'off', protocol: 'onvif',
             onvif: { xAddr: 'http://192.168.1.43/onvif/device_service', profile: 'Profile S' },
-            rtsp: 'rtsp://192.168.1.43:554/stream1' }
+            rtsp: 'rtsp://192.168.1.43:554/stream1', go2rtc: null }
         ]
       },
       {
