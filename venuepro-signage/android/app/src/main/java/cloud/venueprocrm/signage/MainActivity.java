@@ -76,6 +76,12 @@ public class MainActivity extends Activity {
  // arriba de lo que haya adentro de canvas (video/foto/WebRTC) sin pelear
  // por el orden en que cada método de reproducción agrega sus vistas.
  private FrameLayout mixOverlay;
+ // Última mezcla YA aplicada (comparación por texto) — layoutDisplay()
+ // puede llamarse seguido sin que el mix haya cambiado de verdad (cambio
+ // de tamaño de video, rotación, etc.); sin este chequeo, syncMixOverlay()
+ // reconstruiría y volvería a hacer fade-in del overlay en cada una de
+ // esas llamadas, un parpadeo molesto en vez de aparecer una sola vez.
+ private String lastMixJson;
  // Las imágenes del mix (promo/logo) son assets ya subidos — se piden por
  // HTTP autenticado (como el manifiesto) y se cachean en memoria por URL,
  // porque layoutDisplay() se puede llamar seguido y no tiene sentido
@@ -208,7 +214,7 @@ public class MainActivity extends Activity {
   }
   return manifest.getJSONArray("items");
  }
- private void stopPlayback(){ui.removeCallbacks(advance);if(alertBlinkRunnable!=null){ui.removeCallbacks(alertBlinkRunnable);alertBlinkRunnable=null;}if(mediaPlayer!=null){mediaPlayer.release();mediaPlayer=null;}if(exoPlayer!=null){exoPlayer.release();exoPlayer=null;}if(webrtcPc!=null){webrtcPc.close();webrtcPc=null;}if(webrtcRenderer!=null){webrtcRenderer.release();webrtcRenderer=null;}video=null;canvas=null;videoWidth=0;videoHeight=0;if(photo!=null){photo.setImageDrawable(null);photo=null;}mixOverlay=null;alertOverlay=null;livePlayingUrl="";playing=false;root.removeAllViews();}
+ private void stopPlayback(){ui.removeCallbacks(advance);if(alertBlinkRunnable!=null){ui.removeCallbacks(alertBlinkRunnable);alertBlinkRunnable=null;}if(mediaPlayer!=null){mediaPlayer.release();mediaPlayer=null;}if(exoPlayer!=null){exoPlayer.release();exoPlayer=null;}if(webrtcPc!=null){webrtcPc.close();webrtcPc=null;}if(webrtcRenderer!=null){webrtcRenderer.release();webrtcRenderer=null;}video=null;canvas=null;videoWidth=0;videoHeight=0;if(photo!=null){photo.setImageDrawable(null);photo=null;}mixOverlay=null;lastMixJson=null;alertOverlay=null;livePlayingUrl="";playing=false;root.removeAllViews();}
  // Si el manifiesto trae liveSourceWebrtc, se intenta ESA primero — WebRTC
  // puede pedirle un keyframe al encoder al conectarse, cosa que RTSP no
  // puede hacer (solo espera al próximo programado). Si no logra conectar
@@ -544,16 +550,45 @@ public class MainActivity extends Activity {
  // (igual que el resto de la app, que re-renderiza todo ante cualquier
  // cambio) en vez de tratar de diffear — es sencillo y aquí no se llama
  // seguido como para que el costo importe.
+ // "lastMixJson" evita reconstruir/re-aparecer el overlay cuando
+ // layoutDisplay() se llama de nuevo SIN que el mix haya cambiado (cambió
+ // el tamaño del video, giró la pantalla, etc.) — solo se actúa cuando el
+ // contenido de verdad es distinto al que ya se aplicó. El fundido
+ // (fadeMs, "el efecto de la palanca") se hace con un animate() de alpha
+ // real sobre la vista, no un simple show/hide — así SÍ se ve un fundido
+ // en la pantalla física, igual de real que el resto de esta función.
  private void syncMixOverlay(){
-  if(mixOverlay!=null){root.removeView(mixOverlay);mixOverlay=null;}
   JSONObject mix=current==null?null:current.optJSONObject("mix");
-  if(mix==null||canvas==null)return;
-  mixOverlay=buildMixOverlay(mix);
-  root.addView(mixOverlay,new FrameLayout.LayoutParams(-1,-1,Gravity.CENTER));
+  String mixJson=mix==null?null:mix.toString();
+  if(mix==null){
+   if(!java.util.Objects.equals(mixJson,lastMixJson)){
+    lastMixJson=mixJson;
+    if(mixOverlay!=null){
+     final FrameLayout old=mixOverlay;mixOverlay=null;
+     old.animate().alpha(0f).setDuration(300).withEndAction(()->root.removeView(old)).start();
+    }
+   }
+   return;
+  }
+  if(canvas==null)return; // nada que mostrar todavía — no se marca "visto", se reintenta en el próximo layoutDisplay()
+  if(java.util.Objects.equals(mixJson,lastMixJson))return; // sin cambios reales desde la última vez
+  lastMixJson=mixJson;
+  if(mixOverlay!=null){root.removeView(mixOverlay);mixOverlay=null;}
+  FrameLayout overlay=buildMixOverlay(mix);
+  long fadeMs=mix.optLong("fadeMs",400);
+  overlay.setAlpha(0f);
+  root.addView(overlay,new FrameLayout.LayoutParams(-1,-1,Gravity.CENTER));
+  overlay.animate().alpha(1f).setDuration(fadeMs).start();
+  mixOverlay=overlay;
  }
- // Espejo de mixOverlayHtml() en app.js (panel web) — mismos 3 layouts,
- // mismos campos (layout/promoUrl/logoUrl/text/muted, ya resueltos por
- // mixOut() en server.js), para que se vea igual en la pantalla real que
+ private int parseMixColor(String hex,int fallback){
+  if(hex==null||hex.isEmpty())return fallback;
+  try{return Color.parseColor(hex);}catch(Exception e){return fallback;}
+ }
+ // Espejo de mixOverlayHtml() en app.js (panel web) — mismos 4 layouts
+ // (Franja/Esquina/Lateral/Corte) y mismos campos de estilo
+ // (stripeColor/textColor/fontSize/thickness, con los mismos defaults que
+ // styleOf() en server.js), para que se vea igual en la pantalla real que
  // en la vista previa del panel.
  private FrameLayout buildMixOverlay(JSONObject mix){
   String layout=mix.optString("layout","lower");
@@ -561,10 +596,15 @@ public class MainActivity extends Activity {
   String logoUrl=mix.optString("logoUrl","");
   String text=mix.optString("text","");
   boolean muted=mix.optBoolean("muted",false);
+  int stripeColor=parseMixColor(mix.optString("stripeColor",""),Color.rgb(17,17,17));
+  int textColor=parseMixColor(mix.optString("textColor",""),Color.WHITE);
+  float fontSize=(float)mix.optDouble("fontSize",16);
+  int thickness=mix.optInt("thickness",64);
   FrameLayout overlay=new FrameLayout(this);
-  if("full".equals(layout))buildMixFull(overlay,promoUrl,logoUrl,text);
-  else if("split".equals(layout))buildMixSplit(overlay,promoUrl,logoUrl,text);
-  else buildMixLower(overlay,logoUrl,text);
+  if("full".equals(layout))buildMixFull(overlay,promoUrl,logoUrl,text,stripeColor,textColor,fontSize);
+  else if("split".equals(layout))buildMixSplit(overlay,promoUrl,logoUrl,text,stripeColor,textColor,fontSize);
+  else if("corner".equals(layout))buildMixCorner(overlay,promoUrl,logoUrl,text,stripeColor,textColor,fontSize);
+  else buildMixLower(overlay,logoUrl,text,stripeColor,textColor,fontSize,thickness);
   if(muted){
    TextView badge=new TextView(this);badge.setText("🔇 MUDO");badge.setTextColor(Color.rgb(196,201,207));badge.setTextSize(9);badge.setTypeface(null,android.graphics.Typeface.BOLD);
    badge.setBackgroundColor(Color.argb(204,14,15,18));badge.setPadding(7,3,7,3);
@@ -573,34 +613,54 @@ public class MainActivity extends Activity {
   }
   return overlay;
  }
- private void buildMixFull(FrameLayout overlay,String promoUrl,String logoUrl,String text){
-  overlay.setBackgroundColor(Color.rgb(17,17,17));
+ private void buildMixFull(FrameLayout overlay,String promoUrl,String logoUrl,String text,int stripeColor,int textColor,float fontSize){
+  overlay.setBackgroundColor(stripeColor);
   if(!promoUrl.isEmpty()){ImageView bg=mixImage(promoUrl,ImageView.ScaleType.CENTER_CROP);bg.setAlpha(0.55f);overlay.addView(bg,new FrameLayout.LayoutParams(-1,-1));}
   LinearLayout column=new LinearLayout(this);column.setOrientation(LinearLayout.VERTICAL);column.setGravity(Gravity.CENTER_HORIZONTAL);
   if(!logoUrl.isEmpty()){ImageView logo=mixImage(logoUrl,ImageView.ScaleType.FIT_CENTER);LinearLayout.LayoutParams lp=new LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT,44);lp.bottomMargin=8;column.addView(logo,lp);}
-  if(!text.isEmpty()){TextView t=new TextView(this);t.setText(text);t.setTextColor(Color.WHITE);t.setTextSize(16);t.setTypeface(null,android.graphics.Typeface.BOLD);t.setGravity(Gravity.CENTER);t.setShadowLayer(4,0,1,Color.argb(180,0,0,0));column.addView(t);}
+  if(!text.isEmpty()){TextView t=new TextView(this);t.setText(text);t.setTextColor(textColor);t.setTextSize(fontSize);t.setTypeface(null,android.graphics.Typeface.BOLD);t.setGravity(Gravity.CENTER);t.setShadowLayer(4,0,1,Color.argb(180,0,0,0));column.addView(t);}
   FrameLayout.LayoutParams clp=new FrameLayout.LayoutParams(FrameLayout.LayoutParams.WRAP_CONTENT,FrameLayout.LayoutParams.WRAP_CONTENT,Gravity.CENTER);clp.leftMargin=clp.rightMargin=16;
   overlay.addView(column,clp);
  }
- private void buildMixSplit(FrameLayout overlay,String promoUrl,String logoUrl,String text){
+ private void buildMixSplit(FrameLayout overlay,String promoUrl,String logoUrl,String text,int stripeColor,int textColor,float fontSize){
   LinearLayout row=new LinearLayout(this);row.setOrientation(LinearLayout.HORIZONTAL);
   overlay.addView(row,new FrameLayout.LayoutParams(-1,-1));
   row.addView(new View(this),new LinearLayout.LayoutParams(0,-1,62f)); // 62% izquierda, transparente: se ve la señal de abajo
-  FrameLayout panel=new FrameLayout(this);panel.setBackgroundColor(Color.rgb(17,17,17));
+  FrameLayout panel=new FrameLayout(this);panel.setBackgroundColor(stripeColor);
   row.addView(panel,new LinearLayout.LayoutParams(0,-1,38f)); // 38% derecha, el panel del mix
   if(!promoUrl.isEmpty()){ImageView bg=mixImage(promoUrl,ImageView.ScaleType.CENTER_CROP);bg.setAlpha(0.5f);panel.addView(bg,new FrameLayout.LayoutParams(-1,-1));}
   LinearLayout column=new LinearLayout(this);column.setOrientation(LinearLayout.VERTICAL);column.setGravity(Gravity.CENTER_HORIZONTAL);
   if(!logoUrl.isEmpty()){ImageView logo=mixImage(logoUrl,ImageView.ScaleType.FIT_CENTER);LinearLayout.LayoutParams lp=new LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT,30);lp.bottomMargin=6;column.addView(logo,lp);}
-  if(!text.isEmpty()){TextView t=new TextView(this);t.setText(text);t.setTextColor(Color.WHITE);t.setTextSize(11);t.setTypeface(null,android.graphics.Typeface.BOLD);t.setGravity(Gravity.CENTER);t.setShadowLayer(3,0,1,Color.argb(180,0,0,0));column.addView(t);}
+  if(!text.isEmpty()){TextView t=new TextView(this);t.setText(text);t.setTextColor(textColor);t.setTextSize(fontSize*.7f);t.setTypeface(null,android.graphics.Typeface.BOLD);t.setGravity(Gravity.CENTER);t.setShadowLayer(3,0,1,Color.argb(180,0,0,0));column.addView(t);}
   FrameLayout.LayoutParams clp=new FrameLayout.LayoutParams(FrameLayout.LayoutParams.WRAP_CONTENT,FrameLayout.LayoutParams.WRAP_CONTENT,Gravity.CENTER);clp.leftMargin=clp.rightMargin=8;
   panel.addView(column,clp);
  }
- private void buildMixLower(FrameLayout overlay,String logoUrl,String text){
+ // "Esquina" — el 4to formato del mockup, un logo/texto chico anclado a
+ // una esquina, como el "bug" de un canal de TV. Nunca existió antes de
+ // este micro-editor, ni siquiera en el preview del panel.
+ private void buildMixCorner(FrameLayout overlay,String promoUrl,String logoUrl,String text,int stripeColor,int textColor,float fontSize){
+  FrameLayout box=new FrameLayout(this);
+  android.graphics.drawable.GradientDrawable shape=new android.graphics.drawable.GradientDrawable();shape.setColor(stripeColor);shape.setCornerRadius(14);
+  box.setBackground(shape);box.setClipToOutline(true);
+  if(!promoUrl.isEmpty()){ImageView bg=mixImage(promoUrl,ImageView.ScaleType.CENTER_CROP);bg.setAlpha(0.3f);box.addView(bg,new FrameLayout.LayoutParams(-1,-1));}
+  LinearLayout column=new LinearLayout(this);column.setOrientation(LinearLayout.VERTICAL);column.setGravity(Gravity.CENTER_HORIZONTAL);column.setPadding(14,10,14,10);
+  if(!logoUrl.isEmpty()){ImageView logo=mixImage(logoUrl,ImageView.ScaleType.FIT_CENTER);LinearLayout.LayoutParams lp=new LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT,28);lp.bottomMargin=4;column.addView(logo,lp);}
+  if(!text.isEmpty()){TextView t=new TextView(this);t.setText(text);t.setTextColor(textColor);t.setTextSize(fontSize*.65f);t.setTypeface(null,android.graphics.Typeface.BOLD);t.setGravity(Gravity.CENTER);t.setSingleLine(true);t.setEllipsize(android.text.TextUtils.TruncateAt.END);t.setMaxWidth(220);column.addView(t);}
+  box.addView(column,new FrameLayout.LayoutParams(FrameLayout.LayoutParams.WRAP_CONTENT,FrameLayout.LayoutParams.WRAP_CONTENT));
+  FrameLayout.LayoutParams boxLp=new FrameLayout.LayoutParams(FrameLayout.LayoutParams.WRAP_CONTENT,FrameLayout.LayoutParams.WRAP_CONTENT,Gravity.BOTTOM|Gravity.END);boxLp.setMargins(0,0,20,20);
+  overlay.addView(box,boxLp);
+ }
+ // "thickness" es la altura de la franja completa y también escala el
+ // logo con ella — coincide con mixOverlayHtml() en app.js.
+ private void buildMixLower(FrameLayout overlay,String logoUrl,String text,int stripeColor,int textColor,float fontSize,int thickness){
   LinearLayout bar=new LinearLayout(this);bar.setOrientation(LinearLayout.HORIZONTAL);bar.setGravity(Gravity.CENTER_VERTICAL);
-  android.graphics.drawable.GradientDrawable gradient=new android.graphics.drawable.GradientDrawable(android.graphics.drawable.GradientDrawable.Orientation.BOTTOM_TOP,new int[]{Color.argb(209,0,0,0),Color.argb(0,0,0,0)});
-  bar.setBackground(gradient);bar.setPadding(12,10,12,8);
-  if(!logoUrl.isEmpty()){ImageView logo=mixImage(logoUrl,ImageView.ScaleType.CENTER_CROP);LinearLayout.LayoutParams lp=new LinearLayout.LayoutParams(22,22);lp.rightMargin=8;bar.addView(logo,lp);}
-  if(!text.isEmpty()){TextView t=new TextView(this);t.setText(text);t.setTextColor(Color.WHITE);t.setTextSize(12);t.setTypeface(null,android.graphics.Typeface.BOLD);t.setSingleLine(true);t.setEllipsize(android.text.TextUtils.TruncateAt.END);bar.addView(t,new LinearLayout.LayoutParams(0,LinearLayout.LayoutParams.WRAP_CONTENT,1f));}
+  int transparent=Color.argb(0,Color.red(stripeColor),Color.green(stripeColor),Color.blue(stripeColor));
+  int opaque=Color.argb(217,Color.red(stripeColor),Color.green(stripeColor),Color.blue(stripeColor));
+  android.graphics.drawable.GradientDrawable gradient=new android.graphics.drawable.GradientDrawable(android.graphics.drawable.GradientDrawable.Orientation.BOTTOM_TOP,new int[]{opaque,transparent});
+  bar.setBackground(gradient);bar.setPadding(12,10,12,8);bar.setMinimumHeight(thickness);
+  int logoSize=Math.round(thickness*0.34f);
+  if(!logoUrl.isEmpty()){ImageView logo=mixImage(logoUrl,ImageView.ScaleType.CENTER_CROP);LinearLayout.LayoutParams lp=new LinearLayout.LayoutParams(logoSize,logoSize);lp.rightMargin=8;bar.addView(logo,lp);}
+  if(!text.isEmpty()){TextView t=new TextView(this);t.setText(text);t.setTextColor(textColor);t.setTextSize(fontSize);t.setTypeface(null,android.graphics.Typeface.BOLD);t.setSingleLine(true);t.setEllipsize(android.text.TextUtils.TruncateAt.END);bar.addView(t,new LinearLayout.LayoutParams(0,LinearLayout.LayoutParams.WRAP_CONTENT,1f));}
   FrameLayout.LayoutParams blp=new FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT,FrameLayout.LayoutParams.WRAP_CONTENT,Gravity.BOTTOM);
   overlay.addView(bar,blp);
  }

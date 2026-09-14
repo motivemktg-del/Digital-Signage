@@ -270,15 +270,33 @@ export function createApp(env = process.env, studioOptions = {}) {
   await proxyWebrtcOffer(webrtcUrl,req.body,res);
  }));
  // Mezcla sobre la señal en vivo — igual que live_source, es control-plane
- // puro: guardamos la intención (layout + qué promo + si va mudo) y quien
- // la compone de verdad es el reproductor real, leyendo esto del manifiesto.
+ // puro: guardamos la intención (layout + qué promo + si va mudo + el
+ // estilo del "micro-editor": colores/tamaños/grosor/velocidad del
+ // fundido) y quien la compone de verdad es el reproductor real, leyendo
+ // esto del manifiesto.
+ const MIX_LAYOUTS=['lower','split','full','corner'];
+ // style: nunca se guarda a medias — cualquier campo faltante o inválido
+ // cae a un default sensato, así el reproductor real nunca recibe un
+ // color/tamaño roto que no sepa dibujar.
+ const styleOf=s=>{
+  s=s&&typeof s==='object'?s:{};
+  const color=(v,fallback)=>typeof v==='string'&&/^#[0-9a-fA-F]{6}$/.test(v)?v.toLowerCase():fallback;
+  const clamp=(v,lo,hi,fallback)=>Number.isFinite(v)?Math.max(lo,Math.min(hi,v)):fallback;
+  return {
+   stripeColor:color(s.stripeColor,'#111111'),
+   textColor:color(s.textColor,'#ffffff'),
+   fontSize:clamp(s.fontSize,10,48,16),
+   thickness:clamp(s.thickness,20,200,64),
+   fadeMs:clamp(s.fadeMs,0,3000,400),
+  };
+ };
  app.post('/api/devices/:id/mix',admin,wrap(managed('device.mix',async(req,res)=>{
   const b=req.body;
   if(b.clear){
    if(!db.prepare('UPDATE devices SET mix=NULL,revision=revision+1 WHERE id=? AND tenant=?').run(req.params.id,req.user.tenant).changes)throw fail(404,'Pantalla no encontrada.');
    return res.json({ok:true});
   }
-  if(!['lower','split','full'].includes(b.layout))throw fail(400,'Elige un formato de mezcla válido.');
+  if(!MIX_LAYOUTS.includes(b.layout))throw fail(400,'Elige un formato de mezcla válido.');
   const asset=(v,label)=>{if(v===null||v===undefined)return null;if(typeof v!=='string'||!db.prepare('SELECT 1 FROM assets WHERE id=? AND tenant=? AND archived=0').get(v,req.user.tenant))throw fail(400,`Elige ${label} de tu biblioteca.`);return v;};
   const promo=asset(b.promo,'un contenido');
   const logo=asset(b.logo,'un logo');
@@ -286,19 +304,19 @@ export function createApp(env = process.env, studioOptions = {}) {
   const dev=db.prepare('SELECT live_source FROM devices WHERE id=? AND tenant=?').get(req.params.id,req.user.tenant);
   if(!dev)throw fail(404,'Pantalla no encontrada.');
   if(!dev.live_source)throw fail(409,'Esta pantalla necesita una señal en vivo activa para mezclar sobre ella.');
-  const mix=JSON.stringify({layout:b.layout,promo,logo,text,muted:!!b.muted});
+  const mix=JSON.stringify({layout:b.layout,promo,logo,text,muted:!!b.muted,...styleOf(b.style)});
   db.prepare('UPDATE devices SET mix=?,revision=revision+1 WHERE id=? AND tenant=?').run(mix,req.params.id,req.user.tenant);
   res.json({ok:true});
  })));
- // ---- Plantillas de mezcla — guardan una combinación (layout+texto+logo+promo)
+ // ---- Plantillas de mezcla — guardan una combinación (layout+texto+logo+promo+estilo)
  // para reusarla en cualquier pantalla, sin rehacerla cada vez.
- app.get('/api/mix-templates',admin,(req,res)=>res.json(db.prepare('SELECT * FROM mix_templates WHERE tenant=? ORDER BY name').all(req.user.tenant).map(t=>({...t,muted:!!t.muted}))));
+ app.get('/api/mix-templates',admin,(req,res)=>res.json(db.prepare('SELECT * FROM mix_templates WHERE tenant=? ORDER BY name').all(req.user.tenant).map(t=>({...t,muted:!!t.muted,style:styleOf(t.style?JSON.parse(t.style):null)}))));
  app.post('/api/mix-templates',admin,wrap(managed('mixTemplate.create',async(req,res)=>{
   const b=req.body;
-  if(!['lower','split','full'].includes(b.layout))throw fail(400,'Elige un formato de mezcla válido.');
+  if(!MIX_LAYOUTS.includes(b.layout))throw fail(400,'Elige un formato de mezcla válido.');
   const asset=(v,label)=>{if(v===null||v===undefined)return null;if(typeof v!=='string'||!db.prepare('SELECT 1 FROM assets WHERE id=? AND tenant=? AND archived=0').get(v,req.user.tenant))throw fail(400,`Elige ${label} de tu biblioteca.`);return v;};
   const id=randomUUID();
-  db.prepare('INSERT INTO mix_templates (id,tenant,name,layout,promo,logo,text,muted) VALUES (?,?,?,?,?,?,?,?)').run(id,req.user.tenant,nameOf(b.name),b.layout,asset(b.promo,'un contenido'),asset(b.logo,'un logo'),typeof b.text==='string'?b.text.trim().slice(0,140):'',b.muted?1:0);
+  db.prepare('INSERT INTO mix_templates (id,tenant,name,layout,promo,logo,text,muted,style) VALUES (?,?,?,?,?,?,?,?,?)').run(id,req.user.tenant,nameOf(b.name),b.layout,asset(b.promo,'un contenido'),asset(b.logo,'un logo'),typeof b.text==='string'?b.text.trim().slice(0,140):'',b.muted?1:0,JSON.stringify(styleOf(b.style)));
   res.status(201).json({id});
  })));
  app.patch('/api/mix-templates/:id',admin,wrap(managed('mixTemplate.update',async(req,res)=>{
@@ -320,7 +338,7 @@ export function createApp(env = process.env, studioOptions = {}) {
   const devices=location
    ?db.prepare('SELECT id,live_source FROM devices WHERE tenant=? AND location=?').all(req.user.tenant,location)
    :db.prepare('SELECT id,live_source FROM devices WHERE tenant=?').all(req.user.tenant);
-  const mix=JSON.stringify({layout:t.layout,promo:t.promo,logo:t.logo,text:t.text,muted:!!t.muted});
+  const mix=JSON.stringify({layout:t.layout,promo:t.promo,logo:t.logo,text:t.text,muted:!!t.muted,...styleOf(t.style?JSON.parse(t.style):null)});
   let applied=0;
   for(const d of devices){
    if(!d.live_source)continue;

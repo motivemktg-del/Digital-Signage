@@ -73,6 +73,11 @@ export function openStore(dir) {
     name TEXT NOT NULL, layout TEXT NOT NULL, promo TEXT, logo TEXT,
     text TEXT NOT NULL DEFAULT '', muted INTEGER NOT NULL DEFAULT 0
   )`);
+  // style: {stripeColor,textColor,fontSize,thickness,fadeMs} — el "micro-editor"
+  // del mixer (colores/tamaños/grosor/velocidad del fundido). Un solo JSON en
+  // vez de una columna por campo, igual que "mix" en devices — así agregar
+  // otro campo de estilo después no vuelve a pedir otra migración.
+  if(!db.prepare('PRAGMA table_info(mix_templates)').all().some(c=>c.name==='style'))db.exec('ALTER TABLE mix_templates ADD COLUMN style TEXT');
   // Canales: la fuente en vivo se configura UNA vez por ubicación acá (no
   // en cada pantalla) — la ficha de pantalla solo prende/apaga un switch
   // por canal disponible en su ubicación. Reemplaza el flujo viejo de

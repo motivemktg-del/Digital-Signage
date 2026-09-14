@@ -48,13 +48,34 @@ test('Mezcla sobre la señal en vivo: requiere live_source, valida assets, plant
     const saved = await req(`/api/devices/${deviceId}/mix`, { cookie: a, body: { layout: 'lower', promo: null, logo: logoId, text: '2x1 en cervezas', muted: true } });
     assert.equal(saved.status, 200);
     let state = (await req('/api/state', { cookie: a })).data;
-    assert.deepEqual(state.devices[0].mix, { layout: 'lower', promo: null, logo: logoId, text: '2x1 en cervezas', muted: true });
+    // style siempre trae los 5 campos (colores/tamaño/grosor/fundido) con
+    // sus defaults, aunque este POST no haya mandado "style" — así el
+    // reproductor real nunca recibe un mix con estilo a medias.
+    assert.deepEqual(state.devices[0].mix, {
+      layout: 'lower', promo: null, logo: logoId, text: '2x1 en cervezas', muted: true,
+      stripeColor: '#111111', textColor: '#ffffff', fontSize: 16, thickness: 64, fadeMs: 400,
+    });
 
     // El manifiesto del reproductor trae la mezcla con la URL del logo resuelta
     const dev = db.prepare('SELECT * FROM devices WHERE id=?').get(deviceId);
     const manifest = deviceManifest(db, dev, 'http://localhost:3080');
     assert.equal(manifest.mix.text, '2x1 en cervezas');
     assert.ok(manifest.mix.logoUrl.includes('/api/player/media/' + logoId));
+
+    // Micro-editor: layout "corner" (Esquina) + estilo custom, con valores
+    // fuera de rango recortados a su límite en vez de rechazados de plano.
+    const styled = await req(`/api/devices/${deviceId}/mix`, {
+      cookie: a, body: { layout: 'corner', promo: null, logo: null, text: 'hola', muted: false,
+        style: { stripeColor: '#FF00AA', textColor: 'no-es-un-color', fontSize: 999, thickness: -5, fadeMs: 50000 } },
+    });
+    assert.equal(styled.status, 200);
+    state = (await req('/api/state', { cookie: a })).data;
+    assert.equal(state.devices[0].mix.layout, 'corner');
+    assert.equal(state.devices[0].mix.stripeColor, '#ff00aa'); // válido, se guarda en minúsculas
+    assert.equal(state.devices[0].mix.textColor, '#ffffff'); // inválido -> default
+    assert.equal(state.devices[0].mix.fontSize, 48); // recortado al máximo
+    assert.equal(state.devices[0].mix.thickness, 20); // recortado al mínimo
+    assert.equal(state.devices[0].mix.fadeMs, 3000); // recortado al máximo
 
     // Quitar la fuente en vivo borra la mezcla también
     await req(`/api/devices/${deviceId}/live-source`, { cookie: a, body: { url: null } });
@@ -69,9 +90,12 @@ test('Mezcla sobre la señal en vivo: requiere live_source, valida assets, plant
     assert.equal(state.devices[0].mix, null);
 
     // Plantillas: aisladas por tenant, y con la misma validación de assets
-    const tpl = await req('/api/mix-templates', { cookie: a, body: { name: 'Happy Hour', layout: 'split', promo: null, logo: logoId, text: 'Happy hour 5-7pm', muted: false } });
+    const tpl = await req('/api/mix-templates', { cookie: a, body: { name: 'Happy Hour', layout: 'split', promo: null, logo: logoId, text: 'Happy hour 5-7pm', muted: false, style: { stripeColor: '#00ff00', fontSize: 20 } } });
     assert.equal(tpl.status, 201);
-    assert.equal((await req('/api/mix-templates', { cookie: a })).data.length, 1);
+    const tplList = (await req('/api/mix-templates', { cookie: a })).data;
+    assert.equal(tplList.length, 1);
+    // El estilo de la plantilla viaja completo (con defaults para lo que no se mandó)
+    assert.deepEqual(tplList[0].style, { stripeColor: '#00ff00', textColor: '#ffffff', fontSize: 20, thickness: 64, fadeMs: 400 });
     assert.equal((await req('/api/mix-templates', { cookie: b })).data.length, 0);
     assert.equal((await req('/api/mix-templates', { cookie: b, body: { name: 'Ajena', layout: 'lower', promo: null, logo: logoId, text: '', muted: false } })).status, 400);
 
@@ -94,7 +118,11 @@ test('Mezcla sobre la señal en vivo: requiere live_source, valida assets, plant
     assert.equal(applied.data.applied, 2); // deviceId + device2Id (con señal en vivo)
     assert.equal(applied.data.skipped, 1); // device3Id, sin señal en vivo
     let updated = (await req('/api/state', { cookie: a })).data.devices;
-    assert.deepEqual(updated.find(d => d.id === device2Id).mix, { layout: 'split', promo: null, logo: logoId, text: 'Happy hour 5-7pm', muted: false });
+    // El estilo custom de la plantilla (stripeColor/fontSize) viaja con ella al aplicarla
+    assert.deepEqual(updated.find(d => d.id === device2Id).mix, {
+      layout: 'split', promo: null, logo: logoId, text: 'Happy hour 5-7pm', muted: false,
+      stripeColor: '#00ff00', textColor: '#ffffff', fontSize: 20, thickness: 64, fadeMs: 400,
+    });
     assert.equal(updated.find(d => d.id === device3Id).mix, null);
 
     const appliedToLoc = await req(`/api/mix-templates/${tpl.data.id}/apply-all`, { cookie: a, body: { location: loc.id } });

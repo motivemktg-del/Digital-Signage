@@ -362,7 +362,7 @@ const actions = {
     const d = remote.devices.find(d => d.id === id);
     if (!d || !d.liveSource) return showToast('Activa una señal en vivo primero', true);
     ui.mixDeviceId = id;
-    ui.mixDraft = d.mix ? { ...d.mix } : { layout: 'lower', promo: null, logo: null, text: '', muted: false };
+    ui.mixDraft = newMixDraft(d.mix);
     ui.detailDeviceId = null; ui.route = 'mix'; render();
   },
   backFromMix() {
@@ -385,19 +385,25 @@ const actions = {
     input.value = '';
   },
   clearMixLogo() { ui.mixDraft.logo = null; render(); },
-  async saveMixNow() { await run(setMix(ui.mixDeviceId, ui.mixDraft), 'Mezcla guardada'); },
+  // -- micro-editor: colores/tamaño/grosor/velocidad del fundido --
+  setMixStripeColor(_, el) { ui.mixDraft.stripeColor = el.value; render(); },
+  setMixTextColor(_, el) { ui.mixDraft.textColor = el.value; render(); },
+  setMixFontSize(_, el) { ui.mixDraft.fontSize = Number(el.value); render(); },
+  setMixThickness(_, el) { ui.mixDraft.thickness = Number(el.value); render(); },
+  setMixFadeMs(_, el) { ui.mixDraft.fadeMs = Number(el.value); render(); },
+  async saveMixNow() { await run(setMix(ui.mixDeviceId, mixDraftPayload(ui.mixDraft)), 'Mezcla guardada'); },
   async clearMixNow() {
     if (!confirm('¿Quitar la mezcla de esta pantalla?')) return;
-    ui.mixDraft = { layout: 'lower', promo: null, logo: null, text: '', muted: false };
+    ui.mixDraft = newMixDraft();
     await run(clearMix(ui.mixDeviceId), 'Mezcla quitada');
   },
   async saveMixTemplateNow() {
     const name = prompt('Nombre de la plantilla (ej. Happy Hour):'); if (!name) return;
-    await run(createMixTemplate({ name, ...ui.mixDraft }), 'Plantilla guardada');
+    await run(createMixTemplate({ name, ...mixDraftPayload(ui.mixDraft) }), 'Plantilla guardada');
   },
   applyMixTemplate(id) {
     const t = (remote.mixTemplates || []).find(t => t.id === id); if (!t) return;
-    ui.mixDraft = { layout: t.layout, promo: t.promo, logo: t.logo, text: t.text, muted: !!t.muted };
+    ui.mixDraft = newMixDraft({ layout: t.layout, promo: t.promo, logo: t.logo, text: t.text, muted: !!t.muted, ...(t.style || {}) });
     render();
   },
   editMixTemplateNow(id) {
@@ -980,10 +986,26 @@ function previewThumb(d, a, channel) {
     : `<video src="${assetMediaUrl(a.id)}#t=0.5" preload="metadata" muted playsinline style="${s}"></video>`;
 }
 
-// Overlay visual de la mezcla (layout+logo+texto) — se dibuja EN EL PANEL
-// con CSS puro sobre la señal en vivo; el reproductor real compondría la
-// imagen de verdad leyendo este mismo objeto del manifiesto (mix/mixOut en
-// server.js ya manda promoUrl/logoUrl resueltos para eso).
+// El "estilo" (colores/tamaño/grosor/fundido) del mixer viaja FLAT junto a
+// layout/promo/logo/text/muted en ui.mixDraft y en lo que ya devuelve el
+// servidor (state.devices[x].mix) — más simple de leer para el preview.
+// Al GUARDAR sí hay que empacarlo en "style" aparte, que es como lo espera
+// /api/devices/:id/mix y /api/mix-templates (ver styleOf() en server.js).
+const DEFAULT_MIX_STYLE = { stripeColor: '#111111', textColor: '#ffffff', fontSize: 16, thickness: 64, fadeMs: 400 };
+function newMixDraft(base) {
+  return { layout: 'lower', promo: null, logo: null, text: '', muted: false, ...DEFAULT_MIX_STYLE, ...(base || {}) };
+}
+function mixDraftPayload(d) {
+  const { layout, promo, logo, text, muted, stripeColor, textColor, fontSize, thickness, fadeMs } = d;
+  return { layout, promo, logo, text, muted, style: { stripeColor, textColor, fontSize, thickness, fadeMs } };
+}
+
+// Overlay visual de la mezcla (layout+logo+texto+estilo) — se dibuja EN EL
+// PANEL con CSS puro sobre la señal en vivo; el reproductor real compone
+// la imagen de verdad leyendo este mismo objeto del manifiesto (mix/mixOut
+// en server.js ya manda promoUrl/logoUrl resueltos para eso). El fundido
+// (fadeMs) no se ve aquí de forma continua — es cómo el REPRODUCTOR anima
+// la entrada/salida del overlay, este preview solo muestra el resultado.
 function mixOverlayHtml(m) {
   if (!m) return '';
   const promoAsset = m.promo ? remote.assets.find(a => a.id === m.promo) : null;
@@ -991,31 +1013,42 @@ function mixOverlayHtml(m) {
   const promoImg = id => `<img src="${assetMediaUrl(id)}" style="position:absolute;inset:0;width:100%;height:100%;object-fit:cover">`;
   const logoImg = (id, h) => `<img src="${assetMediaUrl(id)}" style="max-height:${h}px;max-width:80%;object-fit:contain">`;
   const muteTag = m.muted ? `<div style="position:absolute;top:8px;right:8px;padding:3px 7px;border-radius:6px;background:rgba(14,15,18,.8);font:600 9px var(--mono);color:#c4c9cf;z-index:2">🔇 MUDO</div>` : '';
+  const stripe = m.stripeColor || DEFAULT_MIX_STYLE.stripeColor;
+  const textColor = m.textColor || DEFAULT_MIX_STYLE.textColor;
+  const fontSize = m.fontSize || DEFAULT_MIX_STYLE.fontSize;
+  const thickness = m.thickness || DEFAULT_MIX_STYLE.thickness;
   if (m.layout === 'full') {
-    return `<div style="position:absolute;inset:0;background:#111;display:flex;align-items:center;justify-content:center">
+    return `<div style="position:absolute;inset:0;background:${stripe};display:flex;align-items:center;justify-content:center">
       ${promoAsset ? `<div style="position:absolute;inset:0;opacity:.55">${promoImg(promoAsset.id)}</div>` : ''}
       <div style="position:relative;display:flex;flex-direction:column;align-items:center;gap:8px;padding:0 16px">
         ${logoAsset ? logoImg(logoAsset.id, 44) : ''}
-        ${m.text ? `<div style="font:700 16px var(--sans);color:#fff;text-shadow:0 1px 4px rgba(0,0,0,.7);text-align:center">${esc(m.text)}</div>` : ''}
+        ${m.text ? `<div style="font:700 ${fontSize}px var(--sans);color:${textColor};text-shadow:0 1px 4px rgba(0,0,0,.7);text-align:center">${esc(m.text)}</div>` : ''}
       </div>
     </div>${muteTag}`;
   }
   if (m.layout === 'split') {
     return `<div style="position:absolute;inset:0;display:flex">
       <div style="flex:1"></div>
-      <div style="width:38%;background:#111;position:relative;display:flex;align-items:center;justify-content:center">
+      <div style="width:38%;background:${stripe};position:relative;display:flex;align-items:center;justify-content:center">
         ${promoAsset ? `<div style="position:absolute;inset:0;opacity:.5">${promoImg(promoAsset.id)}</div>` : ''}
         <div style="position:relative;display:flex;flex-direction:column;align-items:center;gap:6px;padding:0 8px">
           ${logoAsset ? logoImg(logoAsset.id, 30) : ''}
-          ${m.text ? `<div style="font:700 11px var(--sans);color:#fff;text-align:center;text-shadow:0 1px 3px rgba(0,0,0,.7)">${esc(m.text)}</div>` : ''}
+          ${m.text ? `<div style="font:700 ${Math.round(fontSize * .7)}px var(--sans);color:${textColor};text-align:center;text-shadow:0 1px 3px rgba(0,0,0,.7)">${esc(m.text)}</div>` : ''}
         </div>
       </div>
     </div>${muteTag}`;
   }
-  // lower
-  return `<div style="position:absolute;left:0;right:0;bottom:0;background:linear-gradient(0deg,rgba(0,0,0,.82),rgba(0,0,0,0));padding:10px 12px 8px;display:flex;align-items:center;gap:8px">
-    ${logoAsset ? `<img src="${assetMediaUrl(logoAsset.id)}" style="height:22px;width:22px;object-fit:contain;border-radius:4px;flex:none">` : ''}
-    ${m.text ? `<div style="flex:1;min-width:0;font:700 12px var(--sans);color:#fff;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(m.text)}</div>` : ''}
+  if (m.layout === 'corner') {
+    return `<div style="position:absolute;right:10px;bottom:10px;max-width:44%;background:${stripe};border-radius:10px;padding:8px 10px;display:flex;flex-direction:column;align-items:center;gap:4px;box-shadow:0 4px 14px rgba(0,0,0,.4);overflow:hidden">
+      ${promoAsset ? `<div style="position:absolute;inset:0;opacity:.3">${promoImg(promoAsset.id)}</div>` : ''}
+      ${logoAsset ? `<div style="position:relative">${logoImg(logoAsset.id, 24)}</div>` : ''}
+      ${m.text ? `<div style="position:relative;font:700 ${Math.round(fontSize * .65)}px var(--sans);color:${textColor};text-align:center;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:130px">${esc(m.text)}</div>` : ''}
+    </div>${muteTag}`;
+  }
+  // lower — "thickness" es la altura de la franja completa; el logo escala con ella.
+  return `<div style="position:absolute;left:0;right:0;bottom:0;height:${thickness}px;box-sizing:border-box;background:linear-gradient(0deg,${stripe}d9,${stripe}00);padding:10px 12px 8px;display:flex;align-items:center;gap:8px">
+    ${logoAsset ? `<img src="${assetMediaUrl(logoAsset.id)}" style="height:${Math.round(thickness * .34)}px;width:${Math.round(thickness * .34)}px;object-fit:contain;border-radius:4px;flex:none">` : ''}
+    ${m.text ? `<div style="flex:1;min-width:0;font:700 ${fontSize}px var(--sans);color:${textColor};overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(m.text)}</div>` : ''}
   </div>${muteTag}`;
 }
 
@@ -1023,11 +1056,19 @@ function viewMix() {
   const d = remote.devices.find(d => d.id === ui.mixDeviceId);
   if (!d || !ui.mixDraft) return `<div class="screen"><div class="topbar"><div class="back" ${A('backFromMix')}>‹</div></div><div class="content" style="padding-top:30px;text-align:center;color:var(--ink-faint)">Pantalla no encontrada.</div></div>`;
   const m = ui.mixDraft;
-  const layouts = [['lower', 'Inferior'], ['split', 'Dividido'], ['full', 'Pantalla completa']];
-  const layoutLabel = { lower: 'inferior', split: 'dividido', full: 'pantalla completa' };
+  // "Composición" — los 4 formatos del mockup (Franja/Esquina/Lateral/Corte),
+  // cada uno con una guía corta de cuándo tiene sentido usarlo.
+  const layouts = [
+    ['lower', 'Franja', 'Barra abajo, no tapa el contenido'],
+    ['corner', 'Esquina', 'Logo chico en una esquina, discreto'],
+    ['split', 'Lateral', 'Panel a un lado, dos tercios visibles'],
+    ['full', 'Corte', 'Toma toda la pantalla'],
+  ];
+  const layoutLabel = { lower: 'franja', corner: 'esquina', split: 'lateral', full: 'corte' };
   const logoAsset = m.logo ? remote.assets.find(a => a.id === m.logo) : null;
   const images = remote.assets.filter(a => a.type.startsWith('image/'));
   const templates = remote.mixTemplates || [];
+  const fadeLabel = ms => ms === 0 ? 'Corte seco' : ms < 700 ? 'Rápido' : ms < 1600 ? 'Suave' : 'Muy suave';
   return `<div class="screen">
     <div class="topbar"><div class="back" ${A('backFromMix')}>‹</div><div class="title">Mezclar — ${esc(d.name)}</div></div>
     <div class="content">
@@ -1036,13 +1077,46 @@ function viewMix() {
         ${mixOverlayHtml(m)}
       </div>
 
-      <div class="eyebrow">Formato</div>
-      <div class="row" style="gap:8px;margin-bottom:18px">
-        ${layouts.map(([v, label]) => `<div class="row-tap" style="flex:1;text-align:center;padding:11px 4px;border-radius:12px;background:${m.layout === v ? 'rgba(47,123,246,.12)' : 'var(--card-2)'};border:1.5px solid ${m.layout === v ? 'var(--accent)' : 'var(--line)'};font:600 11.5px var(--sans)" ${A('setMixLayout', v)}>${label}</div>`).join('')}
+      <div class="eyebrow">Composición</div>
+      <div class="row" style="gap:6px;margin-bottom:6px">
+        ${layouts.map(([v, label]) => `<div class="row-tap" style="flex:1;text-align:center;padding:11px 4px;border-radius:12px;background:${m.layout === v ? 'rgba(47,123,246,.12)' : 'var(--card-2)'};border:1.5px solid ${m.layout === v ? 'var(--accent)' : 'var(--line)'};font:600 11px var(--sans)" ${A('setMixLayout', v)}>${label}</div>`).join('')}
+      </div>
+      <div style="font:400 10.5px var(--mono);color:var(--ink-dimmer);margin-bottom:18px">${layouts.find(([v]) => v === m.layout)[2]}</div>
+
+      <div class="eyebrow">Fundido</div>
+      <div style="padding:14px 14px 10px;border-radius:14px;background:var(--card-2);border:1px solid var(--line);margin-bottom:18px">
+        <input type="range" min="0" max="3000" step="50" value="${m.fadeMs}" data-change="setMixFadeMs" style="width:100%;accent-color:var(--accent)">
+        <div class="row" style="justify-content:space-between;margin-top:4px">
+          <span style="font:400 9.5px var(--mono);color:var(--ink-faint)">corte seco</span>
+          <span style="font:700 11px var(--sans);color:var(--accent)">${fadeLabel(m.fadeMs)} · ${(m.fadeMs / 1000).toFixed(2)}s</span>
+          <span style="font:400 9.5px var(--mono);color:var(--ink-faint)">fundido lento</span>
+        </div>
       </div>
 
       <div class="eyebrow">Texto</div>
-      <input value="${esc(m.text)}" maxlength="140" placeholder="Texto a mostrar (ej. 2x1 en cervezas)" data-input="setMixText" style="width:100%;box-sizing:border-box;padding:11px 13px;border-radius:10px;background:var(--card-2);border:1px solid var(--line);color:var(--ink);margin-bottom:18px">
+      <input value="${esc(m.text)}" maxlength="140" placeholder="Texto a mostrar (ej. 2x1 en cervezas)" data-input="setMixText" style="width:100%;box-sizing:border-box;padding:11px 13px;border-radius:10px;background:var(--card-2);border:1px solid var(--line);color:var(--ink);margin-bottom:12px">
+      <div class="row" style="gap:10px;margin-bottom:18px">
+        <div class="row" style="gap:8px;flex:1;align-items:center">
+          <input type="color" value="${m.textColor}" data-change="setMixTextColor" style="width:36px;height:36px;border-radius:8px;border:1px solid var(--line);background:none;padding:0;flex:none">
+          <span style="font:400 10px var(--mono);color:var(--ink-dimmer)">color de texto</span>
+        </div>
+        <div class="row" style="gap:8px;flex:1;align-items:center">
+          <input type="range" min="10" max="48" value="${m.fontSize}" data-change="setMixFontSize" style="flex:1;accent-color:var(--accent)">
+          <span style="font:400 10px var(--mono);color:var(--ink-dimmer);flex:none">${m.fontSize}px</span>
+        </div>
+      </div>
+
+      <div class="eyebrow">Franja / panel</div>
+      <div class="row" style="gap:10px;margin-bottom:18px">
+        <div class="row" style="gap:8px;flex:1;align-items:center">
+          <input type="color" value="${m.stripeColor}" data-change="setMixStripeColor" style="width:36px;height:36px;border-radius:8px;border:1px solid var(--line);background:none;padding:0;flex:none">
+          <span style="font:400 10px var(--mono);color:var(--ink-dimmer)">color de fondo</span>
+        </div>
+        <div class="row" style="gap:8px;flex:1;align-items:center">
+          <input type="range" min="20" max="200" value="${m.thickness}" data-change="setMixThickness" style="flex:1;accent-color:var(--accent)">
+          <span style="font:400 10px var(--mono);color:var(--ink-dimmer);flex:none">${m.thickness}px</span>
+        </div>
+      </div>
 
       <div class="eyebrow">Logo</div>
       <div class="row" style="gap:10px;align-items:center;margin-bottom:18px">
