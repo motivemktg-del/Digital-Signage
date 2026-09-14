@@ -292,6 +292,17 @@ public class MainActivity extends Activity {
   canvas=new FrameLayout(this);canvas.setClipChildren(true);root.addView(canvas);layoutDisplay();
   webrtcRenderer=new org.webrtc.SurfaceViewRenderer(this);
   webrtcRenderer.init(webrtcEglBase.getEglBaseContext(),null);
+  // SurfaceViewRenderer es un SurfaceView: dibuja en una superficie APARTE
+  // de la ventana normal, no es una View más del árbol de vistas como
+  // TextureView. Por defecto esa superficie va DETRÁS de la ventana (la
+  // ventana le "perfora un hueco" y compone encima lo que haga falta) —
+  // pero muchas libs de WebRTC la ponen ARRIBA de la ventana para ahorrar
+  // ese costo de composición, lo que deja CUALQUIER vista normal agregada
+  // después (mixOverlay, alertOverlay) dibujada pero invisible, tapada por
+  // el video. Se fuerza explícito a "detrás de la ventana" (el default
+  // correcto) para que las vistas normales sí puedan verse encima.
+  webrtcRenderer.setZOrderMediaOverlay(false);
+  webrtcRenderer.setZOrderOnTop(false);
   canvas.addView(webrtcRenderer,new FrameLayout.LayoutParams(-1,-1,Gravity.CENTER));
   layoutDisplay(); // fija el scalingType (cover/contain) del renderer recién creado
   final boolean[] gaveUp={false};
