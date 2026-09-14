@@ -1,6 +1,8 @@
 :root{
-  --bg:#0e0f12; --ink:#f2f3f5; --ink-dim:#9aa0a8; --ink-dimmer:#7d848c; --ink-faint:#6e757d;
+  --bg:#0e0f12; --bg-rgb:14,15,18; --ink:#f2f3f5; --ink-dim:#9aa0a8; --ink-dimmer:#7d848c; --ink-faint:#6e757d;
   --card:#16181c; --card-2:#1b1d22; --line:rgba(255,255,255,.09); --line-soft:rgba(255,255,255,.07);
+  --grip:rgba(255,255,255,.18);
+  --shadow-1:none; --shadow-2:none; --shadow-tabbar:none;
   --accent:#2f7bf6; --accent-ink:#ffffff;
   --red:#f2635a; --amber:#f0b429; --green:#3ddc97;
   --sans:system-ui,-apple-system,'Segoe UI',Roboto,sans-serif; --mono:ui-monospace,'SFMono-Regular','Roboto Mono',Menlo,Consolas,monospace;
@@ -8,10 +10,17 @@
 }
 /* Tema claro — Ajustes ⚙️ lo activa con un booleano (toggleTheme en
    app.js), agrega/quita la clase .light en <html> y la guarda en
-   localStorage (preferencia del dispositivo, no del tenant). */
+   localStorage (preferencia del dispositivo, no del tenant). Atenuado a
+   propósito (gris suave, no blanco puro) y con sombras reales en vez de
+   solo bordes — en oscuro el contraste de fondo ya alcanza para separar
+   tarjetas, en claro hace falta la sombra para que no se vea plano. */
 html.light{
-  --bg:#faf9f7; --ink:#14161a; --ink-dim:#585f68; --ink-dimmer:#7a828c; --ink-faint:#9aa2ab;
-  --card:#ffffff; --card-2:#f1f0ed; --line:rgba(20,22,26,.10); --line-soft:rgba(20,22,26,.07);
+  --bg:#eceef1; --bg-rgb:236,238,241; --ink:#1b1d22; --ink-dim:#4b515a; --ink-dimmer:#6b727b; --ink-faint:#8a9099;
+  --card:#f6f7f9; --card-2:#e2e4e8; --line:rgba(20,22,26,.08); --line-soft:rgba(20,22,26,.05);
+  --grip:rgba(20,22,26,.18);
+  --shadow-1:0 1px 2px rgba(20,22,26,.05), 0 1px 1px rgba(20,22,26,.04);
+  --shadow-2:0 8px 24px rgba(20,22,26,.12), 0 2px 6px rgba(20,22,26,.07);
+  --shadow-tabbar:0 -2px 10px rgba(20,22,26,.06);
 }
 
 *{box-sizing:border-box}
@@ -49,7 +58,8 @@ body{
 .tabbar{
   position:sticky; bottom:0; left:0; right:0; display:flex; justify-content:space-around;
   padding:10px 12px calc(14px + env(safe-area-inset-bottom));
-  background:rgba(14,15,18,.95); backdrop-filter:blur(6px); border-top:1px solid var(--line);
+  background:rgba(var(--bg-rgb),.95); backdrop-filter:blur(6px); border-top:1px solid var(--line);
+  box-shadow:var(--shadow-tabbar);
 }
 .tab{display:flex; flex-direction:column; align-items:center; gap:5px; cursor:pointer; background:none; border:none; color:inherit; font-family:var(--sans)}
 .tab .ico{width:22px; height:22px; color:var(--ink-faint)}
@@ -59,7 +69,7 @@ body{
 .tab.active span{color:var(--accent)}
 
 /* Cards ------------------------------------------------------------------ */
-.card{background:var(--card); border:1px solid var(--line); border-radius:var(--radius-md)}
+.card{background:var(--card); border:1px solid var(--line); border-radius:var(--radius-md); box-shadow:var(--shadow-1)}
 .card-flat{background:var(--card-2); border-radius:var(--radius-sm)}
 .row{display:flex; align-items:center; gap:11px}
 .row-tap{cursor:pointer}
@@ -107,8 +117,9 @@ body{
   background:var(--card); border-top:1px solid var(--line); border-radius:22px 22px 0 0;
   padding:12px 18px calc(28px + env(safe-area-inset-bottom)); z-index:21;
   animation:sheetUp .24s cubic-bezier(.22,.9,.3,1); max-height:82vh; overflow-y:auto;
+  box-shadow:var(--shadow-2);
 }
-.sheet-grip{width:38px; height:4px; border-radius:2px; background:rgba(255,255,255,.18); margin:0 auto 14px}
+.sheet-grip{width:38px; height:4px; border-radius:2px; background:var(--grip); margin:0 auto 14px}
 
 /* Misc --------------------------------------------------------------------- */
 .grid-2{display:grid; grid-template-columns:1fr 1fr; gap:12px}
