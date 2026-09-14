@@ -89,7 +89,7 @@ export function createApp(env = process.env, studioOptions = {}) {
   if(db.prepare('SELECT 1 FROM devices WHERE tenant=? AND playlist=?').get(req.user.tenant,req.params.id)||db.prepare('SELECT 1 FROM schedules WHERE tenant=? AND playlist=?').get(req.user.tenant,req.params.id))throw fail(409,'La lista está asignada a una pantalla o un programa. Cambia esa asignación primero.');
   if(!db.prepare('DELETE FROM playlists WHERE id=? AND tenant=?').run(req.params.id,req.user.tenant).changes)throw fail(404,'Lista no encontrada.');res.json({ok:true});
  })));
- app.get('/api/state',admin,(req,res)=>res.json({workspaceId:req.user.tenant,tenant:req.user.name,role:req.user.role,email:req.user.email,locations:db.prepare('SELECT id,name FROM locations WHERE tenant=? ORDER BY name').all(req.user.tenant),devices:db.prepare('SELECT id,tenant,name,playlist,seen,version,error,location,paused,revision,orientation,rotation,fit,live_source AS liveSource FROM devices WHERE tenant=?').all(req.user.tenant).map(d=>({...d,targetVersion:deviceManifest(db,d,origin).version})),assets:db.prepare('SELECT id,name,type,size,sha FROM assets WHERE tenant=? AND archived=0').all(req.user.tenant),playlists:db.prepare('SELECT * FROM playlists WHERE tenant=?').all(req.user.tenant).map(p=>({...p,items:JSON.parse(p.items)})),schedules:db.prepare('SELECT * FROM schedules WHERE tenant=? ORDER BY start,priority DESC').all(req.user.tenant).map(s=>({...s,days:JSON.parse(s.days)}))}));
+ app.get('/api/state',admin,(req,res)=>res.json({workspaceId:req.user.tenant,tenant:req.user.name,role:req.user.role,email:req.user.email,locations:db.prepare('SELECT id,name FROM locations WHERE tenant=? ORDER BY name').all(req.user.tenant),devices:db.prepare('SELECT id,tenant,name,playlist,seen,version,error,location,paused,revision,orientation,rotation,fit,live_source AS liveSource FROM devices WHERE tenant=?').all(req.user.tenant).map(d=>({...d,targetVersion:deviceManifest(db,d,origin).version})),assets:db.prepare('SELECT id,name,type,size,sha FROM assets WHERE tenant=? AND archived=0').all(req.user.tenant),playlists:db.prepare('SELECT * FROM playlists WHERE tenant=?').all(req.user.tenant).map(p=>({...p,items:JSON.parse(p.items)})),schedules:db.prepare('SELECT * FROM schedules WHERE tenant=? ORDER BY start,priority DESC').all(req.user.tenant).map(s=>({...s,days:JSON.parse(s.days)})),ptzCameras:db.prepare('SELECT * FROM ptz_cameras WHERE tenant=?').all(req.user.tenant).map(ptzOut)}));
  app.post('/api/devices/:id/display',admin,wrap(managed('device.display',async(req,res)=>{
   const {orientation,rotation,fit}=req.body;
   if(!['auto','landscape','portrait'].includes(orientation)||![0,90,180,270].includes(rotation)||!['cover','contain'].includes(fit))throw fail(400,'Configuración de pantalla inválida.');
@@ -123,6 +123,45 @@ export function createApp(env = process.env, studioOptions = {}) {
  app.delete('/api/locations/:id',admin,wrap(managed('location.delete',async(req,res)=>{
   if(db.prepare('SELECT 1 FROM devices WHERE tenant=? AND location=?').get(req.user.tenant,req.params.id))throw fail(409,'Hay pantallas en esta ubicación. Muévelas primero.');
   if(!db.prepare('DELETE FROM locations WHERE id=? AND tenant=?').run(req.params.id,req.user.tenant).changes)throw fail(404,'Ubicación no encontrada.');
+  res.json({ok:true});
+ })));
+ // ---- Cámaras PTZ — ver la nota en store.js sobre "command" como buzón.
+ const ptzOut=c=>({...c,presets:JSON.parse(c.presets),command:c.command?JSON.parse(c.command):null});
+ app.get('/api/ptz-cameras',admin,(req,res)=>res.json(db.prepare('SELECT * FROM ptz_cameras WHERE tenant=?').all(req.user.tenant).map(ptzOut)));
+ app.post('/api/ptz-cameras',admin,wrap(managed('ptz.create',async(req,res)=>{
+  const {name,location,onvifUrl,rtspUrl}=req.body;
+  if(location&&!db.prepare('SELECT 1 FROM locations WHERE id=? AND tenant=?').get(location,req.user.tenant))throw fail(404,'Ubicación no encontrada.');
+  for(const url of [onvifUrl,rtspUrl])if(url!==undefined&&url!==null&&(typeof url!=='string'||url.length>500))throw fail(400,'URL inválida.');
+  const id=randomUUID();
+  db.prepare('INSERT INTO ptz_cameras (id,tenant,location,name,onvif_url,rtsp_url,presets,command,command_seq,updated) VALUES (?,?,?,?,?,?,?,?,0,?)').run(id,req.user.tenant,location||null,nameOf(name),onvifUrl||null,rtspUrl||null,'[]',null,Date.now());
+  res.status(201).json(ptzOut(db.prepare('SELECT * FROM ptz_cameras WHERE id=?').get(id)));
+ })));
+ app.delete('/api/ptz-cameras/:id',admin,wrap(managed('ptz.delete',async(req,res)=>{
+  if(!db.prepare('DELETE FROM ptz_cameras WHERE id=? AND tenant=?').run(req.params.id,req.user.tenant).changes)throw fail(404,'Cámara no encontrada.');
+  res.json({ok:true});
+ })));
+ app.post('/api/ptz-cameras/:id/presets',admin,wrap(managed('ptz.savePreset',async(req,res)=>{
+  const cam=db.prepare('SELECT * FROM ptz_cameras WHERE id=? AND tenant=?').get(req.params.id,req.user.tenant);if(!cam)throw fail(404,'Cámara no encontrada.');
+  const {label,pan,tilt,zoom}=req.body;
+  if(typeof label!=='string'||!label.trim()||label.length>60||![pan,tilt,zoom].every(Number.isFinite))throw fail(400,'Preset inválido.');
+  const presets=JSON.parse(cam.presets);if(presets.length>=24)throw fail(400,'Máximo 24 encuadres guardados.');
+  const id=randomUUID();presets.push({id,label:label.trim(),pan,tilt,zoom});
+  db.prepare('UPDATE ptz_cameras SET presets=? WHERE id=?').run(JSON.stringify(presets),cam.id);
+  res.status(201).json({id});
+ })));
+ app.delete('/api/ptz-cameras/:id/presets/:presetId',admin,wrap(managed('ptz.deletePreset',async(req,res)=>{
+  const cam=db.prepare('SELECT * FROM ptz_cameras WHERE id=? AND tenant=?').get(req.params.id,req.user.tenant);if(!cam)throw fail(404,'Cámara no encontrada.');
+  const presets=JSON.parse(cam.presets).filter(p=>p.id!==req.params.presetId);
+  db.prepare('UPDATE ptz_cameras SET presets=? WHERE id=?').run(JSON.stringify(presets),cam.id);
+  res.json({ok:true});
+ })));
+ // Guarda la ÚLTIMA intención nada más (mover/preset/zoom/home) — sin
+ // agente local todavía no hay quien la ejecute contra la cámara real.
+ app.post('/api/ptz-cameras/:id/command',admin,wrap(managed('ptz.command',async(req,res)=>{
+  const cam=db.prepare('SELECT * FROM ptz_cameras WHERE id=? AND tenant=?').get(req.params.id,req.user.tenant);if(!cam)throw fail(404,'Cámara no encontrada.');
+  const {type,payload}=req.body;
+  if(!['preset','nudge','zoom','home'].includes(type))throw fail(400,'Comando inválido.');
+  db.prepare('UPDATE ptz_cameras SET command=?,command_seq=command_seq+1,updated=? WHERE id=?').run(JSON.stringify({type,payload:payload||{},issued:Date.now()}),Date.now(),cam.id);
   res.json({ok:true});
  })));
  app.post('/api/devices/:id/location',admin,wrap(managed('device.location',async(req,res)=>{const location=req.body.location||null;if(location&&!db.prepare('SELECT 1 FROM locations WHERE id=? AND tenant=?').get(location,req.user.tenant))throw fail(404,'Ubicación no encontrada.');if(!db.prepare('UPDATE devices SET location=? WHERE id=? AND tenant=?').run(location,req.params.id,req.user.tenant).changes)throw fail(404,'Pantalla no encontrada.');res.json({ok:true});})));

@@ -31,5 +31,16 @@ export function openStore(dir) {
   if(!columns.includes('live_source'))db.exec('ALTER TABLE devices ADD COLUMN live_source TEXT');
   if(!db.prepare('PRAGMA table_info(users)').all().some(c=>c.name==='role'))db.exec("ALTER TABLE users ADD COLUMN role TEXT NOT NULL DEFAULT 'admin'");
   if(!db.prepare('PRAGMA table_info(assets)').all().some(c=>c.name==='archived'))db.exec('ALTER TABLE assets ADD COLUMN archived INTEGER NOT NULL DEFAULT 0');
+  // Cámaras PTZ de una ubicación. "command"/"command_seq" son un buzón: la
+  // API solo GUARDA la última intención (mover/preset/zoom) con un número
+  // de secuencia que sube cada vez — el agente local (todavía no existe)
+  // sería quien la lea y de verdad hable ONVIF/VISCA con la cámara. Sin
+  // agente local, guardar un comando aquí no mueve nada físicamente todavía.
+  db.exec(`CREATE TABLE IF NOT EXISTS ptz_cameras (
+    id TEXT PRIMARY KEY, tenant TEXT NOT NULL REFERENCES tenants(id),
+    location TEXT REFERENCES locations(id), name TEXT NOT NULL,
+    onvif_url TEXT, rtsp_url TEXT, presets TEXT NOT NULL DEFAULT '[]',
+    command TEXT, command_seq INTEGER NOT NULL DEFAULT 0, updated INTEGER
+  )`);
   return db;
 }

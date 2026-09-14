@@ -101,6 +101,49 @@ resto de la app.
 - **Vídeo**: pide el RTSP de la cámara directamente — no hace falta ONVIF
   para esto, es un stream RTSP normal.
 
+### 4.1 Mapeo real: buzón de comandos (`server.js`) → operaciones ONVIF
+
+`server.js` ya tiene el backend real de esto (`ptz_cameras` en `store.js`,
+endpoints `/api/ptz-cameras*`) — guarda la ÚLTIMA intención con un
+`command_seq` que sube en cada una, pero **no habla ONVIF todavía**: eso
+es justo el trabajo del agente local, que leería `command`/`command_seq`
+(con polling, o agregando un endpoint de "dame lo pendiente y bórralo")
+y lo traduciría 1:1 así — Profile S, SOAP sobre HTTP a `onvif_url`:
+
+| `command.type` (lo que guarda la API) | Operación ONVIF real | Notas |
+|---|---|---|
+| `nudge` `{dx,dy}` | `ContinuousMove` con `PanTilt.x/y` proporcional al signo de dx/dy, seguido de `Stop` tras ~150-300ms (o al soltar, si hay UI de mantener presionado) | ONVIF mueve por VELOCIDAD, no por delta — `nudge` es continuo mientras no llegue `Stop` |
+| `zoom` `{delta}` | `ContinuousMove` con `Zoom.x` = signo de delta, `Stop` igual que arriba | Mismo patrón que nudge |
+| `preset` `{pan,tilt,zoom}` | `AbsoluteMove` con `Position.PanTilt.x/y` + `Position.Zoom.x` | Usamos coordenadas propias (guardadas en `ptz_cameras.presets`), no `GotoPreset` con token de cámara — así no dependemos de presets pre-configurados en el hardware |
+| `home` | `AbsoluteMove` a `{pan:0,tilt:0,zoom:1}`, o `GotoHomePosition` si la cámara lo soporta | Profile S no garantiza `GotoHomePosition`; `AbsoluteMove` a cero es más universal |
+
+Antes de cualquiera de estas: `GetProfiles` (una vez, al arrancar o al
+agregar la cámara) para obtener el `ProfileToken` que exigen casi todas
+—`ContinuousMove`/`AbsoluteMove`/`Stop` lo piden como parámetro.
+
+Ejemplo de body SOAP para `ContinuousMove` (los demás siguen el mismo
+patrón — namespace `http://www.onvif.org/ver20/ptz/wsdl`):
+
+```xml
+<soap:Envelope xmlns:soap="http://www.w3.org/2003/05/soap-envelope">
+  <soap:Body>
+    <ContinuousMove xmlns="http://www.onvif.org/ver20/ptz/wsdl">
+      <ProfileToken>PROFILE_TOKEN_DE_GETPROFILES</ProfileToken>
+      <Velocity>
+        <PanTilt x="0.5" y="0" xmlns="http://www.onvif.org/ver10/schema"/>
+        <Zoom x="0" xmlns="http://www.onvif.org/ver10/schema"/>
+      </Velocity>
+    </ContinuousMove>
+  </soap:Body>
+</soap:Envelope>
+```
+
+Autenticación: la mayoría de cámaras ONVIF (incluida Lorex/Dahua) usan
+**WS-Security UsernameToken** con digest (no HTTP Basic) — hace falta
+`nonce` + `created` (timestamp) + `PasswordDigest = Base64(SHA1(nonce +
+created + password))` en el header SOAP. Es el detalle que más se les
+olvida a implementaciones caseras de ONVIF y por el que más fallan.
+
 ## 5. Vídeo en el reproductor — go2rtc + ExoPlayer
 
 Para mostrar el vídeo (RTSP de la PTZ, o lo que salga de la capturadora)
