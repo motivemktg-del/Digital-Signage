@@ -36,25 +36,13 @@ jobs:
 
       # El runner de GitHub NO trae sdkmanager en el PATH por defecto (el
       # SDK preinstalado varía por imagen) — esta acción sí lo deja listo
-      # y acepta las licencias sola. Falla sola de vez en cuando por una
-      # descarga que se corta (nada que ver con el código que se está
-      # compilando — pasó 2 veces seguidas el 2026-09-14 sin ningún cambio
-      # de por medio) — hasta 3 intentos antes de darse por vencido de
-      # verdad, en vez de tirar todo el build por una descarga con mala
-      # suerte.
+      # y acepta las licencias sola. Falló varias veces seguidas el
+      # 2026-09-14 (~21:03-21:07 UTC), incluso en runners nuevos recién
+      # levantados — así que reintentar DENTRO del mismo job (como se
+      # probó primero) no ayuda, es algo externo (descarga de Google o el
+      # propio runner) que necesita que pase el tiempo, no más intentos
+      # seguidos en la misma corrida.
       - name: Configurar el SDK de Android
-        id: setup_android_1
-        uses: android-actions/setup-android@v3
-        continue-on-error: true
-
-      - name: Configurar el SDK de Android (reintento 1)
-        id: setup_android_2
-        if: steps.setup_android_1.outcome == 'failure'
-        uses: android-actions/setup-android@v3
-        continue-on-error: true
-
-      - name: Configurar el SDK de Android (reintento 2)
-        if: steps.setup_android_1.outcome == 'failure' && steps.setup_android_2.outcome == 'failure'
         uses: android-actions/setup-android@v3
 
       - name: Instalar plataforma y build-tools de Android (compileSdk 35)
