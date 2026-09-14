@@ -26,6 +26,15 @@ const ui = {
                         // confirmación real de la cámara (no hay agente local)
   mixDeviceId: null,  // pantalla abierta en viewMix
   mixDraft: null,      // { layout, promo, logo, text, muted } — se guarda con saveMixNow()
+  // Editores tipo sheet — mismo patrón que playlistDraft/scheduleDraft:
+  // {id:null,...} = creando nuevo, {id,...} = editando uno existente. Con
+  // id, el editor muestra un 🗑️ para eliminar — así ninguna lista de
+  // arriba necesita exponer un botón de eliminar suelto.
+  locationDraft: null,    // { id, name }
+  channelDraft: null,     // { id, name, url }
+  assetFolderDraft: null, // { id, name }
+  ptzCameraDraft: null,   // { id, location, name, onvifUrl, rtspUrl, viewUrl }
+  mixTemplateDraft: null, // { id, name } — solo el nombre es editable in-place
   theme: (() => { try { return localStorage.getItem('signage-theme') || 'dark'; } catch { return 'dark'; } })(),
 };
 applyTheme(ui.theme);
@@ -111,27 +120,48 @@ const actions = {
   async moveDevice(id, select) {
     await run(setDeviceLocation(id, select.value || null), 'Ubicación actualizada');
   },
-  async addLocation() {
-    const name = prompt('Nombre de la ubicación:'); if (!name) return;
-    await run(createLocation(name), 'Ubicación creada');
+  addLocation() { ui.locationDraft = { id: null, name: '' }; render(); },
+  editLocationNow(id) {
+    const l = remote.locations.find(l => l.id === id); if (!l) return;
+    ui.locationDraft = { id: l.id, name: l.name }; render();
   },
-  goLocations() { ui.route = 'locations'; render(); },
-  async deleteLocationNow(id) {
-    const loc = remote.locations.find(l => l.id === id);
+  cancelLocation() { ui.locationDraft = null; render(); },
+  async saveLocationDraft(_, form) {
+    const name = form.name.value.trim(); if (!name) return;
+    const id = ui.locationDraft.id;
+    ui.locationDraft = null;
+    await run(id ? renameLocation(id, name) : createLocation(name), id ? 'Ubicación actualizada' : 'Ubicación creada');
+  },
+  async deleteLocationFromEditor() {
+    const loc = remote.locations.find(l => l.id === ui.locationDraft.id);
     if (!confirm(`¿Eliminar la ubicación "${loc ? loc.name : ''}"? Esto no se puede deshacer.`)) return;
+    const id = ui.locationDraft.id;
+    ui.locationDraft = null;
     await run(deleteLocation(id), 'Ubicación eliminada');
   },
+  goLocations() { ui.route = 'locations'; render(); },
 
   // -- cámaras PTZ (backend real; sin agente local todavía, ver PLAYER_SPEC.md) --
-  async addPtzCamera(locationId) {
-    const name = prompt('Nombre de la cámara (ej. PTZ Escenario):'); if (!name) return;
-    const onvifUrl = prompt('URL ONVIF (xAddr) — ej. http://192.168.1.41/onvif/device_service. Déjalo vacío si no la tienes aún:') || null;
-    const rtspUrl = prompt('URL RTSP del video (opcional, para el agente local):') || null;
-    const viewUrl = prompt('URL de VIDEO puro (no la página del visor) — ej. http://192.168.1.10:1984/api/stream.mp4?src=ptz1 de go2rtc. El panel la trae a través del servidor, así que evita páginas como stream.html (esas abren su propio WebSocket). Déjalo vacío si no la tienes aún:') || null;
-    await run(createPtzCamera({ name, location: locationId, onvifUrl, rtspUrl, viewUrl }), 'Cámara agregada');
+  addPtzCamera(locationId) {
+    ui.ptzCameraDraft = { id: null, location: locationId, name: '', onvifUrl: '', rtspUrl: '', viewUrl: '' }; render();
   },
-  async deletePtzCameraNow(id) {
+  editPtzCameraNow(id) {
+    const c = remote.ptzCameras.find(c => c.id === id); if (!c) return;
+    ui.ptzCameraDraft = { id: c.id, location: c.location, name: c.name, onvifUrl: c.onvif_url || '', rtspUrl: c.rtsp_url || '', viewUrl: c.view_url || '' };
+    render();
+  },
+  cancelPtzCamera() { ui.ptzCameraDraft = null; render(); },
+  async savePtzCameraDraft(_, form) {
+    const name = form.name.value.trim(); if (!name) return;
+    const payload = { name, onvifUrl: form.onvifUrl.value.trim() || null, rtspUrl: form.rtspUrl.value.trim() || null, viewUrl: form.viewUrl.value.trim() || null };
+    const { id, location } = ui.ptzCameraDraft;
+    ui.ptzCameraDraft = null;
+    await run(id ? updatePtzCamera(id, payload) : createPtzCamera({ ...payload, location }), id ? 'Cámara actualizada' : 'Cámara agregada');
+  },
+  async deletePtzCameraFromEditor() {
     if (!confirm('¿Eliminar esta cámara PTZ?')) return;
+    const id = ui.ptzCameraDraft.id;
+    ui.ptzCameraDraft = null;
     await run(deletePtzCamera(id), 'Cámara eliminada');
   },
   openPtz(camId) {
@@ -228,10 +258,13 @@ const actions = {
       actions.openStudioDraft(created.id);
     } catch (e) { showToast(e.message, true); }
   },
-  async deleteStudioDraftNow(id) {
+  async deleteStudioDraftFromEditor() {
     if (!confirm('¿Eliminar este borrador de poster? No se puede deshacer.')) return;
-    try { await deleteStudioDraft(id); ui.studioDrafts = await listStudioDrafts(); showToast('Borrador eliminado'); render(); }
-    catch (e) { showToast(e.message, true); }
+    const id = ui.studioDraftId;
+    try {
+      await deleteStudioDraft(id); ui.studioDrafts = await listStudioDrafts();
+      showToast('Borrador eliminado'); actions.backToStudio();
+    } catch (e) { showToast(e.message, true); }
   },
   async openStudioDraft(id) {
     ui.studioDraftId = id; ui.route = 'studioDraft'; ui.studioJob = null; render();
@@ -292,19 +325,22 @@ const actions = {
   // ver server.js /api/channels). Solo pide nombre y URL: un canal está
   // disponible para TODAS las pantallas (switch en Fuente) y para TODAS
   // las listas de reproducción (item más), sin restringirlo por ubicación.
-  async newChannel() {
-    const name = prompt('Nombre del canal (ej. Digital Signage, TV Bar):'); if (!name) return;
-    const url = prompt('URL de VIDEO puro de go2rtc (no la página del visor) — ej. http://192.168.1.10:1984/api/stream.mp4?src=mivideo:'); if (!url) return;
-    await run(createChannel({ name, url }), 'Canal creado');
-  },
-  async editChannelNow(id) {
+  newChannel() { ui.channelDraft = { id: null, name: '', url: '' }; render(); },
+  editChannelNow(id) {
     const c = remote.channels.find(c => c.id === id); if (!c) return;
-    const name = prompt('Nombre del canal:', c.name); if (!name) return;
-    const url = prompt('URL de VIDEO puro de go2rtc:', c.url); if (!url) return;
-    await run(updateChannel(id, { name, url }), 'Canal actualizado');
+    ui.channelDraft = { id: c.id, name: c.name, url: c.url }; render();
   },
-  async deleteChannelNow(id) {
+  cancelChannel() { ui.channelDraft = null; render(); },
+  async saveChannelDraft(_, form) {
+    const name = form.name.value.trim(), url = form.url.value.trim(); if (!name || !url) return;
+    const id = ui.channelDraft.id;
+    ui.channelDraft = null;
+    await run(id ? updateChannel(id, { name, url }) : createChannel({ name, url }), id ? 'Canal actualizado' : 'Canal creado');
+  },
+  async deleteChannelFromEditor() {
     if (!confirm('¿Eliminar este canal? Las pantallas que lo tengan activo se quedarán sin fuente.')) return;
+    const id = ui.channelDraft.id;
+    ui.channelDraft = null;
     await run(deleteChannel(id), 'Canal eliminado');
   },
   // Un solo <select> decide la Fuente: "" = lista de reproducción, o el id
@@ -358,8 +394,21 @@ const actions = {
     ui.mixDraft = { layout: t.layout, promo: t.promo, logo: t.logo, text: t.text, muted: !!t.muted };
     render();
   },
-  async deleteMixTemplateNow(id) {
+  editMixTemplateNow(id) {
+    const t = (remote.mixTemplates || []).find(t => t.id === id); if (!t) return;
+    ui.mixTemplateDraft = { id: t.id, name: t.name }; render();
+  },
+  cancelMixTemplate() { ui.mixTemplateDraft = null; render(); },
+  async saveMixTemplateDraft(_, form) {
+    const name = form.name.value.trim(); if (!name) return;
+    const id = ui.mixTemplateDraft.id;
+    ui.mixTemplateDraft = null;
+    await run(renameMixTemplate(id, name), 'Plantilla actualizada');
+  },
+  async deleteMixTemplateFromEditor() {
     if (!confirm('¿Eliminar esta plantilla?')) return;
+    const id = ui.mixTemplateDraft.id;
+    ui.mixTemplateDraft = null;
     await run(deleteMixTemplate(id), 'Plantilla eliminada');
   },
   // "Marca consistente en cada pantalla que manejas" — aplica de un toque,
@@ -444,13 +493,23 @@ const actions = {
   closeAssetPreview() { ui.previewAssetId = null; render(); },
 
   // -- carpetas de biblioteca (solo agrupan, no mueven el archivo real) --
-  async newAssetFolder() {
-    const name = prompt('Nombre de la carpeta (ej. Promociones, Menú):'); if (!name) return;
-    await run(createAssetFolder(name), 'Carpeta creada');
+  newAssetFolder() { ui.assetFolderDraft = { id: null, name: '' }; render(); },
+  editAssetFolderNow(id) {
+    const f = (remote.assetFolders || []).find(f => f.id === id); if (!f) return;
+    ui.assetFolderDraft = { id: f.id, name: f.name }; render();
   },
-  async deleteAssetFolderNow(id) {
-    const f = (remote.assetFolders || []).find(f => f.id === id);
+  cancelAssetFolder() { ui.assetFolderDraft = null; render(); },
+  async saveAssetFolderDraft(_, form) {
+    const name = form.name.value.trim(); if (!name) return;
+    const id = ui.assetFolderDraft.id;
+    ui.assetFolderDraft = null;
+    await run(id ? renameAssetFolder(id, name) : createAssetFolder(name), id ? 'Carpeta actualizada' : 'Carpeta creada');
+  },
+  async deleteAssetFolderFromEditor() {
+    const f = (remote.assetFolders || []).find(f => f.id === ui.assetFolderDraft.id);
     if (!confirm(`¿Eliminar la carpeta "${f ? f.name : ''}"? Debe estar vacía.`)) return;
+    const id = ui.assetFolderDraft.id;
+    ui.assetFolderDraft = null;
     await run(deleteAssetFolder(id), 'Carpeta eliminada');
   },
   openAssetFolder(id) { ui.currentFolderId = id; ui.route = 'assetFolder'; render(); },
@@ -492,8 +551,10 @@ const actions = {
     await run(savePlaylist({ id: d.id || undefined, name: d.name.trim(), items: d.items }), 'Lista guardada');
     ui.playlistDraft = null; render();
   },
-  async deletePlaylistNow(id) {
+  async deletePlaylistFromEditor() {
     if (!confirm('¿Eliminar esta lista?')) return;
+    const id = ui.playlistDraft.id;
+    ui.playlistDraft = null;
     await run(deletePlaylist(id), 'Lista eliminada');
   },
 
@@ -520,8 +581,10 @@ const actions = {
     await run(saveSchedule(payload), 'Programa guardado');
     ui.scheduleDraft = null; render();
   },
-  async deleteScheduleNow(id) {
+  async deleteScheduleFromEditor() {
     if (!confirm('¿Eliminar este programa?')) return;
+    const id = ui.scheduleDraft.id;
+    ui.scheduleDraft = null;
     await run(deleteSchedule(id), 'Programa eliminado');
   },
 
@@ -660,14 +723,33 @@ function viewLocations() {
             <div style="font:600 13px var(--sans)">${esc(l.name)}</div>
             <div style="font:400 10.5px var(--mono);color:var(--ink-dimmer)">${counts.get(l.id) || 0} pantalla${counts.get(l.id) === 1 ? '' : 's'}</div>
           </div>
-          <div class="row-tap" title="Eliminar ubicación" style="width:28px;height:28px;border-radius:8px;flex:none;display:flex;align-items:center;justify-content:center;background:rgba(242,99,90,.12);margin-right:6px" ${A('deleteLocationNow', l.id)}>🗑️</div>
+          <div class="row-tap" title="Editar ubicación" style="width:28px;height:28px;border-radius:8px;flex:none;display:flex;align-items:center;justify-content:center;background:var(--card-2);margin-right:6px" ${A('editLocationNow', l.id)}>✏️</div>
           <div style="color:var(--ink-faint);font:400 13px var(--sans)">›</div>
         </div>`).join('')}
       </div>`}
       <div class="btn btn-ghost row-tap" ${A('addLocation')}>+ Añadir ubicación</div>
-      <div style="font:400 11px/1.5 var(--sans);color:var(--ink-faint);margin-top:14px">Puedes borrar una ubicación vacía. Renombrarla todavía no lo soporta el backend.</div>
+      <div style="font:400 11px/1.5 var(--sans);color:var(--ink-faint);margin-top:14px">Solo se puede eliminar una ubicación vacía (sin pantallas).</div>
     </div>
+    ${ui.locationDraft ? locationEditor(ui.locationDraft) : ''}
     ${toastHtml()}
+  </div>`;
+}
+
+function locationEditor(d) {
+  return `<div class="backdrop" ${A('cancelLocation')}></div>
+  <div class="sheet${sheetEntering ? ' entering' : ''}">
+    <div class="sheet-grip"></div>
+    <div class="row" style="gap:8px;margin-bottom:14px">
+      <div style="font:700 18px var(--sans);flex:1;min-width:0">${d.id ? 'Editar ubicación' : 'Nueva ubicación'}</div>
+      ${d.id ? `<div class="row-tap" title="Eliminar ubicación" style="width:30px;height:30px;border-radius:9px;flex:none;display:flex;align-items:center;justify-content:center;background:rgba(242,99,90,.12)" ${A('deleteLocationFromEditor')}>🗑️</div>` : ''}
+      <div class="row-tap" title="Cerrar" style="width:30px;height:30px;border-radius:9px;flex:none;display:flex;align-items:center;justify-content:center;background:var(--card-2);font:600 14px var(--sans)" ${A('cancelLocation')}>✕</div>
+    </div>
+    <form data-submit="saveLocationDraft">
+      <div class="stack">
+        <input name="name" required value="${esc(d.name)}" placeholder="Nombre (ej. Sucursal Centro)" style="padding:11px 13px;border-radius:10px;background:var(--card-2);border:1px solid var(--line);color:var(--ink)">
+        <button type="submit" class="btn btn-primary" style="border:none">Guardar</button>
+      </div>
+    </form>
   </div>`;
 }
 
@@ -692,12 +774,34 @@ function viewLocationDetail() {
             <div style="font:600 12.5px var(--sans)">${esc(c.name)}</div>
             <div style="font:400 10px var(--mono);color:var(--ink-dimmer);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${c.onvif_url ? 'ONVIF configurado' : 'sin URL ONVIF'} · ${c.presets.length} encuadre${c.presets.length === 1 ? '' : 's'}</div>
           </div>
-          <div class="row-tap" title="Eliminar cámara" style="margin-left:8px" ${A('deletePtzCameraNow', c.id)}>🗑️</div>
+          <div class="row-tap" title="Editar cámara" style="margin-left:8px" ${A('editPtzCameraNow', c.id)}>✏️</div>
         </div>`).join('')}
       </div>
     </div>
     ${ui.detailDeviceId ? deviceSheet() : ''}
+    ${ui.ptzCameraDraft ? ptzCameraEditor(ui.ptzCameraDraft) : ''}
     ${toastHtml()}
+  </div>`;
+}
+
+function ptzCameraEditor(d) {
+  return `<div class="backdrop" ${A('cancelPtzCamera')}></div>
+  <div class="sheet${sheetEntering ? ' entering' : ''}">
+    <div class="sheet-grip"></div>
+    <div class="row" style="gap:8px;margin-bottom:14px">
+      <div style="font:700 18px var(--sans);flex:1;min-width:0">${d.id ? 'Editar cámara' : 'Nueva cámara PTZ'}</div>
+      ${d.id ? `<div class="row-tap" title="Eliminar cámara" style="width:30px;height:30px;border-radius:9px;flex:none;display:flex;align-items:center;justify-content:center;background:rgba(242,99,90,.12)" ${A('deletePtzCameraFromEditor')}>🗑️</div>` : ''}
+      <div class="row-tap" title="Cerrar" style="width:30px;height:30px;border-radius:9px;flex:none;display:flex;align-items:center;justify-content:center;background:var(--card-2);font:600 14px var(--sans)" ${A('cancelPtzCamera')}>✕</div>
+    </div>
+    <form data-submit="savePtzCameraDraft">
+      <div class="stack">
+        <input name="name" required value="${esc(d.name)}" placeholder="Nombre (ej. PTZ Escenario)" style="padding:11px 13px;border-radius:10px;background:var(--card-2);border:1px solid var(--line);color:var(--ink)">
+        <input name="onvifUrl" value="${esc(d.onvifUrl)}" placeholder="URL ONVIF — ej. onvif://usuario:pass@192.168.1.41" style="padding:11px 13px;border-radius:10px;background:var(--card-2);border:1px solid var(--line);color:var(--ink)">
+        <input name="rtspUrl" value="${esc(d.rtspUrl)}" placeholder="URL RTSP del video (opcional)" style="padding:11px 13px;border-radius:10px;background:var(--card-2);border:1px solid var(--line);color:var(--ink)">
+        <input name="viewUrl" value="${esc(d.viewUrl)}" placeholder="URL de VIDEO de go2rtc — ej. http://host:1984/api/stream.mp4?src=ptz1" style="padding:11px 13px;border-radius:10px;background:var(--card-2);border:1px solid var(--line);color:var(--ink)">
+        <button type="submit" class="btn btn-primary" style="border:none">Guardar</button>
+      </div>
+    </form>
   </div>`;
 }
 
@@ -975,11 +1079,30 @@ function viewMix() {
           <div style="flex:1;min-width:0"><div style="font:600 12.5px var(--sans);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(t.name)}</div><div style="font:400 10px var(--mono);color:var(--ink-dimmer)">${layoutLabel[t.layout] || t.layout}${t.text ? ' · ' + esc(t.text) : ''}</div></div>
           ${d.location ? `<div class="row-tap" title="Aplicar a toda la ubicación" style="width:28px;height:28px;border-radius:8px;flex:none;display:flex;align-items:center;justify-content:center;background:var(--card)" ${A('applyMixTemplateToLocation', t.id)}>📍</div>` : ''}
           <div class="row-tap" title="Aplicar a todas mis pantallas" style="width:28px;height:28px;border-radius:8px;flex:none;display:flex;align-items:center;justify-content:center;background:var(--card)" ${A('applyMixTemplateToAllNow', t.id)}>📡</div>
-          <div class="row-tap" title="Eliminar" style="width:28px;height:28px;border-radius:8px;flex:none;display:flex;align-items:center;justify-content:center;background:rgba(242,99,90,.1)" ${A('deleteMixTemplateNow', t.id)}>🗑️</div>
+          <div class="row-tap" title="Editar" style="width:28px;height:28px;border-radius:8px;flex:none;display:flex;align-items:center;justify-content:center;background:var(--card)" ${A('editMixTemplateNow', t.id)}>✏️</div>
         </div>`).join('')}
       </div>
     </div>
+    ${ui.mixTemplateDraft ? mixTemplateEditor(ui.mixTemplateDraft) : ''}
     ${toastHtml()}
+  </div>`;
+}
+
+function mixTemplateEditor(d) {
+  return `<div class="backdrop" ${A('cancelMixTemplate')}></div>
+  <div class="sheet${sheetEntering ? ' entering' : ''}">
+    <div class="sheet-grip"></div>
+    <div class="row" style="gap:8px;margin-bottom:14px">
+      <div style="font:700 18px var(--sans);flex:1;min-width:0">Editar plantilla</div>
+      <div class="row-tap" title="Eliminar plantilla" style="width:30px;height:30px;border-radius:9px;flex:none;display:flex;align-items:center;justify-content:center;background:rgba(242,99,90,.12)" ${A('deleteMixTemplateFromEditor')}>🗑️</div>
+      <div class="row-tap" title="Cerrar" style="width:30px;height:30px;border-radius:9px;flex:none;display:flex;align-items:center;justify-content:center;background:var(--card-2);font:600 14px var(--sans)" ${A('cancelMixTemplate')}>✕</div>
+    </div>
+    <form data-submit="saveMixTemplateDraft">
+      <div class="stack">
+        <input name="name" required value="${esc(d.name)}" placeholder="Nombre de la plantilla" style="padding:11px 13px;border-radius:10px;background:var(--card-2);border:1px solid var(--line);color:var(--ink)">
+        <button type="submit" class="btn btn-primary" style="border:none">Guardar</button>
+      </div>
+    </form>
   </div>`;
 }
 
@@ -1124,33 +1247,24 @@ actions.toggleScanner = async function () {
 
 // ---- Contenido (assets + listas) ---------------------------------------------
 
-// Tarjeta de archivo — miniatura clicable (abre el lightbox a tamaño real)
-// + ✏️/🗑️ y, si se pasa folderless=true, un botón 📁 para archivarlo en
-// una carpeta (solo tiene sentido en la grilla "sin carpeta").
-function assetCard(a, { showMoveToFolder } = {}) {
-  return `<div class="card" style="overflow:hidden">
-    <div class="row-tap" ${A('openAssetPreview', a.id)}>
-      ${a.type.startsWith('image/')
-        ? `<img src="${assetMediaUrl(a.id)}" style="width:100%;aspect-ratio:16/9;object-fit:cover;display:block;background:#000">`
-        : `<video src="${assetMediaUrl(a.id)}#t=0.5" preload="metadata" muted playsinline style="width:100%;aspect-ratio:16/9;object-fit:cover;display:block;background:#000"></video>`}
-    </div>
-    <div style="padding:9px 10px">
-      <div style="font:600 12px var(--sans);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;margin-bottom:6px">${esc(a.name)}</div>
-      <div class="row" style="gap:8px">
-        <div class="row-tap" title="Renombrar" ${A('renameAsset', a.id)}>✏️</div>
-        ${showMoveToFolder ? `<select data-change="moveAssetToFolderNow" data-arg="${esc(a.id)}" style="font:400 10px var(--mono);background:var(--card-2);color:var(--ink-dimmer);border:1px solid var(--line);border-radius:6px;padding:2px 4px">
-          <option value="">📁 mover…</option>
-          ${(remote.assetFolders || []).map(f => `<option value="${esc(f.id)}">${esc(f.name)}</option>`).join('')}
-        </select>` : `<div class="row-tap" title="Quitar de la carpeta" ${A('removeAssetFromFolderNow', a.id)}>📁↩</div>`}
-        <div class="row-tap" title="Archivar" style="margin-left:auto" ${A('archiveAsset', a.id)}>🗑️</div>
-      </div>
-    </div>
+// Tarjeta de archivo — SOLO miniatura + nombre, tapable (abre el lightbox
+// a tamaño real). Renombrar/mover/eliminar viven ADENTRO del lightbox
+// (assetPreviewOverlay), no expuestos aquí — nada de iconos sueltos en la
+// grilla.
+function assetCard(a) {
+  return `<div class="card row-tap" style="overflow:hidden" ${A('openAssetPreview', a.id)}>
+    ${a.type.startsWith('image/')
+      ? `<img src="${assetMediaUrl(a.id)}" style="width:100%;aspect-ratio:16/9;object-fit:cover;display:block;background:#000">`
+      : `<video src="${assetMediaUrl(a.id)}#t=0.5" preload="metadata" muted playsinline style="width:100%;aspect-ratio:16/9;object-fit:cover;display:block;background:#000"></video>`}
+    <div style="padding:9px 10px;font:600 12px var(--sans);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(a.name)}</div>
   </div>`;
 }
 
 // Lightbox a pantalla completa — la imagen/video se ve en su proporción
 // real (object-fit:contain), nunca recortada a un cuadrado como en la
-// miniatura de la grilla.
+// miniatura de la grilla. Renombrar/mover de carpeta/eliminar viven acá
+// abajo, en una barra de acciones — es el "editor" del archivo, así que
+// eliminar (Archivar) no necesita estar expuesto en la grilla.
 function assetPreviewOverlay() {
   const a = ui.previewAssetId && remote.assets.find(x => x.id === ui.previewAssetId);
   if (!a) return '';
@@ -1158,10 +1272,19 @@ function assetPreviewOverlay() {
     ? `<img src="${assetMediaUrl(a.id)}" style="max-width:100%;max-height:100%;object-fit:contain;border-radius:10px;display:block">`
     : `<video src="${assetMediaUrl(a.id)}" controls autoplay playsinline style="max-width:100%;max-height:100%;object-fit:contain;border-radius:10px;display:block"></video>`;
   return `<div class="backdrop" style="background:rgba(6,7,9,.92);z-index:40" ${A('closeAssetPreview')}></div>
-  <div style="position:fixed;inset:0;z-index:41;display:flex;align-items:center;justify-content:center;padding:28px;pointer-events:none">
-    <div style="pointer-events:auto;max-width:100%;max-height:100%;position:relative;animation:popUp .2s cubic-bezier(.22,.9,.3,1)">
+  <div style="position:fixed;inset:0;z-index:41;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:14px;padding:28px;pointer-events:none">
+    <div style="pointer-events:auto;max-width:100%;max-height:76%;position:relative;animation:popUp .2s cubic-bezier(.22,.9,.3,1)">
       ${media}
       <div class="row-tap" title="Cerrar" style="position:absolute;top:-16px;right:-16px;width:32px;height:32px;border-radius:50%;background:var(--card);border:1px solid var(--line);display:flex;align-items:center;justify-content:center;font:600 14px var(--sans)" ${A('closeAssetPreview')}>✕</div>
+    </div>
+    <div style="pointer-events:auto;display:flex;align-items:center;gap:10px;max-width:100%;background:var(--card);border:1px solid var(--line);border-radius:14px;padding:9px 13px">
+      <div style="font:600 12.5px var(--sans);color:#fff;max-width:130px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(a.name)}</div>
+      <div class="row-tap" title="Renombrar" ${A('renameAsset', a.id)}>✏️</div>
+      ${a.folder ? `<div class="row-tap" title="Quitar de la carpeta" ${A('removeAssetFromFolderNow', a.id)}>📁↩</div>` : `<select data-change="moveAssetToFolderNow" data-arg="${esc(a.id)}" style="font:400 10px var(--mono);background:var(--card-2);color:#fff;border:1px solid var(--line);border-radius:6px;padding:3px 5px">
+        <option value="">📁 mover…</option>
+        ${(remote.assetFolders || []).map(f => `<option value="${esc(f.id)}">${esc(f.name)}</option>`).join('')}
+      </select>`}
+      <div class="row-tap" title="Eliminar" ${A('archiveAsset', a.id)}>🗑️</div>
     </div>
   </div>`;
 }
@@ -1186,8 +1309,7 @@ function viewPlaylists() {
             <div style="font:600 12.5px var(--sans)">${esc(p.name)}</div>
             <div style="font:400 10px var(--mono);color:var(--ink-dimmer)">${p.items.length} elemento${p.items.length === 1 ? '' : 's'}${p.items.some(i => i.channel) ? ' · incluye canal en vivo' : ''}</div>
           </div>
-          <div class="row-tap" style="font:500 11px var(--sans);color:var(--ink-dim);margin-right:12px" ${A('editPlaylist', p.id)}>Editar</div>
-          <div class="row-tap" style="font:500 11px var(--sans);color:var(--red)" ${A('deletePlaylistNow', p.id)}>Eliminar</div>
+          <div class="row-tap" style="font:500 11px var(--sans);color:var(--ink-dim)" ${A('editPlaylist', p.id)}>Editar</div>
         </div>`).join('')}
       </div>
     </div>
@@ -1214,8 +1336,7 @@ function viewContent() {
               <div style="font:600 12.5px var(--sans)">${esc(c.name)}</div>
               <div style="font:400 10px var(--mono);color:var(--ink-dimmer);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${loc ? esc(loc.name) + ' · ' : ''}${esc(c.url)}</div>
             </div>
-            <div class="row-tap" style="font:500 11px var(--sans);color:var(--ink-dim);margin-right:12px" ${A('editChannelNow', c.id)}>Editar</div>
-            <div class="row-tap" style="font:500 11px var(--sans);color:var(--red)" ${A('deleteChannelNow', c.id)}>Eliminar</div>
+            <div class="row-tap" style="font:500 11px var(--sans);color:var(--ink-dim)" ${A('editChannelNow', c.id)}>Editar</div>
           </div>`;
         }).join('')}
       </div>
@@ -1234,8 +1355,7 @@ function viewContent() {
           const count = remote.assets.filter(a => a.folder === f.id).length;
           return `<div class="row card-flat row-tap" style="padding:12px 14px" ${A('openAssetFolder', f.id)}>
             <div style="flex:1;min-width:0"><div style="font:600 12.5px var(--sans)">📁 ${esc(f.name)}</div><div style="font:400 10px var(--mono);color:var(--ink-dimmer)">${count} archivo${count === 1 ? '' : 's'}</div></div>
-            <div class="row-tap" style="font:500 11px var(--sans);color:var(--ink-dim);margin-right:12px" ${A('editAssetFolderNow', f.id)}>Editar</div>
-            <div class="row-tap" style="font:500 11px var(--sans);color:var(--red)" ${A('deleteAssetFolderNow', f.id)}>Eliminar</div>
+            <div class="row-tap" style="font:500 11px var(--sans);color:var(--ink-dim)" ${A('editAssetFolderNow', f.id)}>Editar</div>
           </div>`;
         }).join('')}
       </div>` : ''}
@@ -1245,12 +1365,51 @@ function viewContent() {
         <div style="color:var(--ink-faint);font:400 13px var(--sans)">›</div>
       </div>
       <div class="grid-2" style="margin-bottom:20px">
-        ${unfoldered.length === 0 ? `<div style="grid-column:1/-1;padding:24px 0;text-align:center;color:var(--ink-faint);font:400 12px var(--sans)">Sin archivos todavía.</div>` : unfoldered.map(a => assetCard(a, { showMoveToFolder: true })).join('')}
+        ${unfoldered.length === 0 ? `<div style="grid-column:1/-1;padding:24px 0;text-align:center;color:var(--ink-faint);font:400 12px var(--sans)">Sin archivos todavía.</div>` : unfoldered.map(assetCard).join('')}
       </div>
     </div>
     ${tabbar()}
     ${assetPreviewOverlay()}
+    ${ui.channelDraft ? channelEditor(ui.channelDraft) : ''}
+    ${ui.assetFolderDraft ? assetFolderEditor(ui.assetFolderDraft) : ''}
     ${toastHtml()}
+  </div>`;
+}
+
+function channelEditor(d) {
+  return `<div class="backdrop" ${A('cancelChannel')}></div>
+  <div class="sheet${sheetEntering ? ' entering' : ''}">
+    <div class="sheet-grip"></div>
+    <div class="row" style="gap:8px;margin-bottom:14px">
+      <div style="font:700 18px var(--sans);flex:1;min-width:0">${d.id ? 'Editar canal' : 'Nuevo canal'}</div>
+      ${d.id ? `<div class="row-tap" title="Eliminar canal" style="width:30px;height:30px;border-radius:9px;flex:none;display:flex;align-items:center;justify-content:center;background:rgba(242,99,90,.12)" ${A('deleteChannelFromEditor')}>🗑️</div>` : ''}
+      <div class="row-tap" title="Cerrar" style="width:30px;height:30px;border-radius:9px;flex:none;display:flex;align-items:center;justify-content:center;background:var(--card-2);font:600 14px var(--sans)" ${A('cancelChannel')}>✕</div>
+    </div>
+    <form data-submit="saveChannelDraft">
+      <div class="stack">
+        <input name="name" required value="${esc(d.name)}" placeholder="Nombre (ej. Digital Signage, TV Bar)" style="padding:11px 13px;border-radius:10px;background:var(--card-2);border:1px solid var(--line);color:var(--ink)">
+        <input name="url" required value="${esc(d.url)}" placeholder="URL de VIDEO puro de go2rtc — ej. http://host:1984/api/stream.mp4?src=mivideo" style="padding:11px 13px;border-radius:10px;background:var(--card-2);border:1px solid var(--line);color:var(--ink)">
+        <button type="submit" class="btn btn-primary" style="border:none">Guardar</button>
+      </div>
+    </form>
+  </div>`;
+}
+
+function assetFolderEditor(d) {
+  return `<div class="backdrop" ${A('cancelAssetFolder')}></div>
+  <div class="sheet${sheetEntering ? ' entering' : ''}">
+    <div class="sheet-grip"></div>
+    <div class="row" style="gap:8px;margin-bottom:14px">
+      <div style="font:700 18px var(--sans);flex:1;min-width:0">${d.id ? 'Editar carpeta' : 'Nueva carpeta'}</div>
+      ${d.id ? `<div class="row-tap" title="Eliminar carpeta" style="width:30px;height:30px;border-radius:9px;flex:none;display:flex;align-items:center;justify-content:center;background:rgba(242,99,90,.12)" ${A('deleteAssetFolderFromEditor')}>🗑️</div>` : ''}
+      <div class="row-tap" title="Cerrar" style="width:30px;height:30px;border-radius:9px;flex:none;display:flex;align-items:center;justify-content:center;background:var(--card-2);font:600 14px var(--sans)" ${A('cancelAssetFolder')}>✕</div>
+    </div>
+    <form data-submit="saveAssetFolderDraft">
+      <div class="stack">
+        <input name="name" required value="${esc(d.name)}" placeholder="Nombre (ej. Promociones, Menú)" style="padding:11px 13px;border-radius:10px;background:var(--card-2);border:1px solid var(--line);color:var(--ink)">
+        <button type="submit" class="btn btn-primary" style="border:none">Guardar</button>
+      </div>
+    </form>
   </div>`;
 }
 
@@ -1267,7 +1426,7 @@ function viewAssetFolder() {
         ${available.map(a => `<option value="${esc(a.id)}">${esc(a.name)}</option>`).join('')}
       </select>
       <div class="grid-2">
-        ${items.length === 0 ? `<div style="grid-column:1/-1;padding:24px 0;text-align:center;color:var(--ink-faint);font:400 12px var(--sans)">Carpeta vacía — agrega archivos arriba.</div>` : items.map(a => assetCard(a)).join('')}
+        ${items.length === 0 ? `<div style="grid-column:1/-1;padding:24px 0;text-align:center;color:var(--ink-faint);font:400 12px var(--sans)">Carpeta vacía — agrega archivos arriba.</div>` : items.map(assetCard).join('')}
       </div>
     </div>
     ${assetPreviewOverlay()}
@@ -1279,8 +1438,9 @@ function playlistEditor(d) {
   return `<div class="backdrop" ${A('cancelPlaylist')}></div>
   <div class="sheet${sheetEntering ? ' entering' : ''}" style="max-height:90vh">
     <div class="sheet-grip"></div>
-    <div class="row" style="margin-bottom:14px">
+    <div class="row" style="gap:8px;margin-bottom:14px">
       <div style="font:700 18px var(--sans);flex:1;min-width:0">${d.id ? 'Editar lista' : 'Nueva lista'}</div>
+      ${d.id ? `<div class="row-tap" title="Eliminar lista" style="width:30px;height:30px;border-radius:9px;flex:none;display:flex;align-items:center;justify-content:center;background:rgba(242,99,90,.12)" ${A('deletePlaylistFromEditor')}>🗑️</div>` : ''}
       <div class="row-tap" title="Cerrar" style="width:30px;height:30px;border-radius:9px;flex:none;display:flex;align-items:center;justify-content:center;background:var(--card-2);font:600 14px var(--sans)" ${A('cancelPlaylist')}>✕</div>
     </div>
     <input value="${esc(d.name)}" placeholder="Nombre de la lista" data-input="setDraftName" style="width:100%;box-sizing:border-box;padding:12px 14px;border-radius:12px;background:var(--card-2);border:1px solid var(--line);color:var(--ink);margin-bottom:14px">
@@ -1328,10 +1488,7 @@ function viewSchedule() {
             </div>
             <div style="font:400 10.5px var(--mono);color:var(--ink-dimmer);margin-bottom:8px">${dev ? esc(dev.name) : '?'} · ${pl ? esc(pl.name) : '?'} · ${s.start}–${s.end}</div>
             <div class="row" style="gap:4px;margin-bottom:10px">${[0,1,2,3,4,5,6].map(n => `<span style="width:20px;height:20px;border-radius:6px;display:flex;align-items:center;justify-content:center;font:600 9.5px var(--sans);background:${s.days.includes(n) ? 'var(--accent)' : 'var(--card-2)'};color:${s.days.includes(n) ? '#fff' : 'var(--ink-faint)'}">${DAY_SHORT[n]}</span>`).join('')}</div>
-            <div class="row" style="gap:14px">
-              <div class="row-tap" style="font:500 11.5px var(--sans);color:var(--ink-dim)" ${A('editSchedule', s.id)}>Editar</div>
-              <div class="row-tap" style="font:500 11.5px var(--sans);color:var(--red)" ${A('deleteScheduleNow', s.id)}>Eliminar</div>
-            </div>
+            <div class="row-tap" style="font:500 11.5px var(--sans);color:var(--ink-dim)" ${A('editSchedule', s.id)}>Editar</div>
           </div>`;
         }).join('')}
       </div>
@@ -1346,8 +1503,9 @@ function scheduleEditor(d) {
   return `<div class="backdrop" ${A('cancelSchedule')}></div>
   <div class="sheet${sheetEntering ? ' entering' : ''}" style="max-height:92vh">
     <div class="sheet-grip"></div>
-    <div class="row" style="margin-bottom:14px">
+    <div class="row" style="gap:8px;margin-bottom:14px">
       <div style="font:700 18px var(--sans);flex:1;min-width:0">${d.id ? 'Editar programa' : 'Nuevo programa'}</div>
+      ${d.id ? `<div class="row-tap" title="Eliminar programa" style="width:30px;height:30px;border-radius:9px;flex:none;display:flex;align-items:center;justify-content:center;background:rgba(242,99,90,.12)" ${A('deleteScheduleFromEditor')}>🗑️</div>` : ''}
       <div class="row-tap" title="Cerrar" style="width:30px;height:30px;border-radius:9px;flex:none;display:flex;align-items:center;justify-content:center;background:var(--card-2);font:600 14px var(--sans)" ${A('cancelSchedule')}>✕</div>
     </div>
     <form data-submit="saveScheduleDraft">
@@ -1413,9 +1571,9 @@ function studioDraftsList(c) {
   </div>
   <div class="row" style="justify-content:flex-end;margin-bottom:12px"><div class="btn btn-primary row-tap" style="padding:10px 16px;font-size:12.5px" ${A('newStudioDraft')}>+ Nuevo poster</div></div>
   <div class="stack">
-    ${(ui.studioDrafts || []).map(d => `<div class="card row" style="padding:12px 14px">
-      <div class="row-tap" style="flex:1;min-width:0" ${A('openStudioDraft', d.id)}><div style="font:600 12.5px var(--sans)">${esc(d.name)}</div><div style="font:400 10px var(--mono);color:var(--ink-dimmer)">${fmtTime(d.created)}</div></div>
-      <div class="row-tap" title="Eliminar" style="margin-left:8px" ${A('deleteStudioDraftNow', d.id)}>🗑️</div>
+    ${(ui.studioDrafts || []).map(d => `<div class="card row row-tap" style="padding:12px 14px" ${A('openStudioDraft', d.id)}>
+      <div style="flex:1;min-width:0"><div style="font:600 12.5px var(--sans)">${esc(d.name)}</div><div style="font:400 10px var(--mono);color:var(--ink-dimmer)">${fmtTime(d.created)}</div></div>
+      <div style="color:var(--ink-faint);font:400 13px var(--sans)">›</div>
     </div>`).join('') || `<div style="padding:16px 0;text-align:center;color:var(--ink-faint);font:400 12px var(--sans)">Sin posters todavía.</div>`}
   </div>`;
 }
@@ -1427,7 +1585,7 @@ function viewStudioDraft() {
   const c = ui.studioConfig;
   const canGenerate = c && c.enabled && c.verified && c.requestsThisMonth < c.monthlyLimit;
   return `<div class="screen">
-    <div class="topbar"><div class="back" ${A('backToStudio')}>‹</div><div class="title">${esc(d.name)}</div></div>
+    <div class="topbar" style="justify-content:space-between"><div class="row" style="gap:0"><div class="back" ${A('backToStudio')}>‹</div><div class="title">${esc(d.name)}</div></div><div class="row-tap" title="Eliminar borrador" style="font-size:17px;line-height:1" ${A('deleteStudioDraftFromEditor')}>🗑️</div></div>
     <div class="content">
       ${job && job.status === 'ready' ? `<canvas id="studio-canvas" style="width:100%;border-radius:14px;margin-bottom:8px;background:#000"></canvas>
           <div class="btn btn-primary row-tap" style="margin-bottom:16px" ${A('exportStudioNow')}>Guardar en biblioteca</div>`

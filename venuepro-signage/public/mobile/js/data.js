@@ -35,12 +35,14 @@ function getState() { return api('/api/state'); }
 // ---- ubicaciones y pantallas -------------------------------------------
 
 function createLocation(name) { return api('/api/locations', { method: 'POST', body: { name } }); }
+function renameLocation(id, name) { return api(`/api/locations/${id}`, { method: 'PATCH', body: { name } }); }
 function deleteLocation(id) { return api(`/api/locations/${id}`, { method: 'DELETE' }); }
 function deleteStudioDraft(id) { return api(`/api/studio/drafts/${id}`, { method: 'DELETE' }); }
 
 // ---- cámaras PTZ (backend real — ver PLAYER_SPEC.md para el mapeo a ONVIF) --
 function listPtzCameras() { return api('/api/ptz-cameras'); }
 function createPtzCamera(payload) { return api('/api/ptz-cameras', { method: 'POST', body: payload } ); } // {name, location, onvifUrl, rtspUrl, viewUrl}
+function updatePtzCamera(id, payload) { return api(`/api/ptz-cameras/${id}`, { method: 'PATCH', body: payload } ); } // {name, onvifUrl, rtspUrl, viewUrl}
 function deletePtzCamera(id) { return api(`/api/ptz-cameras/${id}`, { method: 'DELETE' }); }
 function sendPtzToScreens(id) { return api(`/api/ptz-cameras/${id}/send-to-screens`, { method: 'POST' }); }
 function savePtzPreset(camId, preset) { return api(`/api/ptz-cameras/${camId}/presets`, { method: 'POST', body: preset } ); } // {label,pan,tilt,zoom}
@@ -63,6 +65,7 @@ function broadcastAlert(payload) { return api('/api/alerts/broadcast', { method:
 function clearAllAlerts(location) { return api('/api/alerts/clear-all', { method: 'POST', body: { location } }); }
 function listMixTemplates() { return api('/api/mix-templates'); }
 function createMixTemplate(payload) { return api('/api/mix-templates', { method: 'POST', body: payload }); } // {name,layout,promo,logo,text,muted}
+function renameMixTemplate(id, name) { return api(`/api/mix-templates/${id}`, { method: 'PATCH', body: { name } }); }
 function deleteMixTemplate(id) { return api(`/api/mix-templates/${id}`, { method: 'DELETE' }); }
 function applyMixTemplateToAll(id, location) { return api(`/api/mix-templates/${id}/apply-all`, { method: 'POST', body: { location } }); } // location:null = todas mis pantallas
 

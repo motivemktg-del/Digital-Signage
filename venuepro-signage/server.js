@@ -301,6 +301,10 @@ export function createApp(env = process.env, studioOptions = {}) {
   db.prepare('INSERT INTO mix_templates (id,tenant,name,layout,promo,logo,text,muted) VALUES (?,?,?,?,?,?,?,?)').run(id,req.user.tenant,nameOf(b.name),b.layout,asset(b.promo,'un contenido'),asset(b.logo,'un logo'),typeof b.text==='string'?b.text.trim().slice(0,140):'',b.muted?1:0);
   res.status(201).json({id});
  })));
+ app.patch('/api/mix-templates/:id',admin,wrap(managed('mixTemplate.update',async(req,res)=>{
+  if(!db.prepare('UPDATE mix_templates SET name=? WHERE id=? AND tenant=?').run(nameOf(req.body.name),req.params.id,req.user.tenant).changes)throw fail(404,'Plantilla no encontrada.');
+  res.json({ok:true});
+ })));
  app.delete('/api/mix-templates/:id',admin,wrap(managed('mixTemplate.delete',async(req,res)=>{
   if(!db.prepare('DELETE FROM mix_templates WHERE id=? AND tenant=?').run(req.params.id,req.user.tenant).changes)throw fail(404,'Plantilla no encontrada.');
   res.json({ok:true});
@@ -442,6 +446,10 @@ export function createApp(env = process.env, studioOptions = {}) {
   if(!result.changes) throw fail(400,'Código vencido o ya utilizado.'); res.json({ok:true});
  })));
  app.post('/api/locations',admin,wrap(managed('location.create',async(req,res)=>{const id=randomUUID();db.prepare('INSERT INTO locations VALUES (?,?,?)').run(id,req.user.tenant,nameOf(req.body.name));res.json({id});})));
+ app.patch('/api/locations/:id',admin,wrap(managed('location.update',async(req,res)=>{
+  if(!db.prepare('UPDATE locations SET name=? WHERE id=? AND tenant=?').run(nameOf(req.body.name),req.params.id,req.user.tenant).changes)throw fail(404,'Ubicación no encontrada.');
+  res.json({ok:true});
+ })));
  app.delete('/api/locations/:id',admin,wrap(managed('location.delete',async(req,res)=>{
   if(db.prepare('SELECT 1 FROM devices WHERE tenant=? AND location=?').get(req.user.tenant,req.params.id))throw fail(409,'Hay pantallas en esta ubicación. Muévelas primero.');
   if(!db.prepare('DELETE FROM locations WHERE id=? AND tenant=?').run(req.params.id,req.user.tenant).changes)throw fail(404,'Ubicación no encontrada.');
@@ -457,6 +465,12 @@ export function createApp(env = process.env, studioOptions = {}) {
   const id=randomUUID();
   db.prepare('INSERT INTO ptz_cameras (id,tenant,location,name,onvif_url,rtsp_url,view_url,presets,command,command_seq,updated) VALUES (?,?,?,?,?,?,?,?,?,0,?)').run(id,req.user.tenant,location||null,nameOf(name),onvifUrl||null,rtspUrl||null,viewUrl||null,'[]',null,Date.now());
   res.status(201).json(ptzOut(db.prepare('SELECT * FROM ptz_cameras WHERE id=?').get(id)));
+ })));
+ app.patch('/api/ptz-cameras/:id',admin,wrap(managed('ptz.update',async(req,res)=>{
+  const {name,onvifUrl,rtspUrl,viewUrl}=req.body;
+  for(const url of [onvifUrl,rtspUrl,viewUrl])if(url!==undefined&&url!==null&&(typeof url!=='string'||url.length>500))throw fail(400,'URL inválida.');
+  if(!db.prepare('UPDATE ptz_cameras SET name=?,onvif_url=?,rtsp_url=?,view_url=? WHERE id=? AND tenant=?').run(nameOf(name),onvifUrl||null,rtspUrl||null,viewUrl||null,req.params.id,req.user.tenant).changes)throw fail(404,'Cámara no encontrada.');
+  res.json({ok:true});
  })));
  app.delete('/api/ptz-cameras/:id',admin,wrap(managed('ptz.delete',async(req,res)=>{
   if(!db.prepare('DELETE FROM ptz_cameras WHERE id=? AND tenant=?').run(req.params.id,req.user.tenant).changes)throw fail(404,'Cámara no encontrada.');
