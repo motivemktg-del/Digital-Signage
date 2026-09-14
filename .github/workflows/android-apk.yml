@@ -29,15 +29,19 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Configurar JDK 17
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: '17'
 
+      # El runner de GitHub NO trae sdkmanager en el PATH por defecto (el
+      # SDK preinstalado varía por imagen) — esta acción sí lo deja listo
+      # y acepta las licencias sola.
+      - name: Configurar el SDK de Android
+        uses: android-actions/setup-android@v3
+
       - name: Instalar plataforma y build-tools de Android (compileSdk 35)
-        run: |
-          yes | sdkmanager --licenses > /dev/null 2>&1 || true
-          sdkmanager "platforms;android-35" "build-tools;35.0.0"
+        run: sdkmanager "platforms;android-35" "build-tools;35.0.0"
 
       - name: Cachear Gradle (usa el wrapper del repo, ./gradlew)
         uses: gradle/actions/setup-gradle@v4
