@@ -110,7 +110,15 @@ public class MainActivity extends Activity {
  private void syncLoop(){
   if(destroyed)return;
   boolean ok=sync();
-  network.schedule(this::syncLoop,ok?0:5,TimeUnit.SECONDS);
+  // Mínimo 1s SIEMPRE, incluso si salió bien — no es solo cosmético: si
+  // el servidor no está devolviendo el long-poll real por el motivo que
+  // sea (versión vieja del server sin este soporte, algún proxy que no
+  // deja la conexión abierta, etc.), esto evita que el loop se vuelva un
+  // bucle cerrado disparando pedidos sin parar — eso satura la red y la
+  // CPU de la propia tablet, y se ve como la pantalla congelándose. Con
+  // el long-poll funcionando de verdad (servidor esperando ~18s cuando no
+  // hay nada nuevo) este piso de 1s no se nota en nada.
+  network.schedule(this::syncLoop,ok?1:5,TimeUnit.SECONDS);
  }
  private HttpURLConnection connection(String url,String method)throws Exception{
   URL parsed=new URL(url);if(!parsed.getProtocol().equals("https")||!parsed.getHost().equals(new URL(SERVER).getHost()))throw new IOException("Servidor no permitido");

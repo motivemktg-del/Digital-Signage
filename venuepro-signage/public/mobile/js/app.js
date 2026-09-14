@@ -1139,17 +1139,13 @@ function deviceSheet() {
           <option value="" ${!d.liveChannel ? 'selected' : ''}>▶ Lista de reproducción${playlist ? ' — ' + esc(playlist.name) : ''}</option>
           ${chans.map(c => `<option value="${esc(c.id)}" ${d.liveChannel === c.id ? 'selected' : ''}>🔴 ${esc(c.name)}</option>`).join('')}
         </select>
-        <div class="row-tap" title="${d.paused ? 'Reanudar' : 'Pausar'}" style="padding:11px;border-radius:10px;flex:none;display:flex;align-items:center;justify-content:center;background:var(--card-2);border:1px solid var(--line);font-size:15px;line-height:1" ${A('togglePause', d.id)}>${d.paused ? '▶️' : '⏸️'}</div>
-        <div class="row-tap" title="Sincronizar" style="padding:11px;border-radius:10px;flex:none;display:flex;align-items:center;justify-content:center;background:var(--card-2);border:1px solid var(--line);font-size:15px;line-height:1" ${A('syncNow', d.id)}>🔄</div>
+        ${d.liveSource ? `<div class="row-tap" style="padding:7px 14px;border-radius:10px;flex:none;background:${d.mix ? 'rgba(47,123,246,.12)' : 'var(--card-2)'};border:1px solid ${d.mix ? 'var(--accent)' : 'var(--line)'};font:600 12px var(--sans)" ${A('openMix', d.id)}>🎛️ Mezclar</div>` : ''}
+        <div class="row-tap" style="padding:7px 14px;border-radius:10px;flex:none;background:${d.alert ? 'rgba(242,99,90,.14)' : 'var(--card-2)'};border:1px solid ${d.alert ? 'var(--red)' : 'var(--line)'};font:600 12px var(--sans)" ${A('sendAlertNow', d.id)}>🚨 Alerta</div>
       </div>
       ${chans.length === 0 ? `<div class="row card-flat row-tap" style="padding:11px 14px;opacity:.6;margin-bottom:16px" ${A('goTab', 'content')}>
         <div style="flex:1;min-width:0"><div style="font:600 12.5px var(--sans);margin-bottom:2px">Sin canales todavía</div><div style="font:400 10.5px var(--mono);color:var(--ink-dimmer)">configúralos en Contenido → Canales</div></div>
       </div>` : ''}`;
     })()}
-    <div class="row" style="justify-content:flex-end;gap:8px;margin-bottom:10px">
-      ${d.liveSource ? `<div class="row-tap" style="padding:7px 16px;border-radius:10px;background:${d.mix ? 'rgba(47,123,246,.12)' : 'var(--card-2)'};border:1px solid ${d.mix ? 'var(--accent)' : 'var(--line)'};font:600 12px var(--sans)" ${A('openMix', d.id)}>🎛️ Mezclar</div>` : ''}
-      <div class="row-tap" style="padding:7px 16px;border-radius:10px;background:${d.alert ? 'rgba(242,99,90,.14)' : 'var(--card-2)'};border:1px solid ${d.alert ? 'var(--red)' : 'var(--line)'};font:600 12px var(--sans)" ${A('sendAlertNow', d.id)}>🚨 Alerta</div>
-    </div>
     ${d.alert ? `<div class="row" style="gap:8px;padding:9px 12px;border-radius:10px;background:rgba(242,99,90,.1);border:1px solid rgba(242,99,90,.3);margin-bottom:12px">
       <div style="flex:1;min-width:0"><div style="font:600 11.5px var(--sans);color:var(--red)">${esc(d.alert.text)}</div><div style="font:400 9.5px var(--mono);color:var(--ink-dimmer)">${{ info: 'informativa', warning: 'advertencia', critical: 'crítica' }[d.alert.level] || d.alert.level}</div></div>
       <div class="row-tap" style="font:600 11px var(--sans);color:var(--ink-dimmer)" ${A('clearAlertNow', d.id)}>Quitar</div>
