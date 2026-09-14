@@ -29,6 +29,11 @@ export function openStore(dir) {
   // Fuente en vivo local (ej. go2rtc en la LAN del local) — reemplaza la
   // lista mientras esté puesta. NULL = usa la lista asignada, como antes.
   if(!columns.includes('live_source'))db.exec('ALTER TABLE devices ADD COLUMN live_source TEXT');
+  // Mezcla sobre la señal en vivo: {layout:'lower'|'split'|'full', promo:assetId|null, muted}.
+  // Solo tiene sentido con live_source puesto; igual que command en
+  // ptz_cameras, es la ÚLTIMA intención — el reproductor real (Android o el
+  // agente local) es quien compone la imagen de verdad. NULL = sin mezcla.
+  if(!columns.includes('mix'))db.exec('ALTER TABLE devices ADD COLUMN mix TEXT');
   if(!db.prepare('PRAGMA table_info(users)').all().some(c=>c.name==='role'))db.exec("ALTER TABLE users ADD COLUMN role TEXT NOT NULL DEFAULT 'admin'");
   if(!db.prepare('PRAGMA table_info(assets)').all().some(c=>c.name==='archived'))db.exec('ALTER TABLE assets ADD COLUMN archived INTEGER NOT NULL DEFAULT 0');
   // Cámaras PTZ de una ubicación. "command"/"command_seq" son un buzón: la
@@ -41,6 +46,14 @@ export function openStore(dir) {
     location TEXT REFERENCES locations(id), name TEXT NOT NULL,
     onvif_url TEXT, rtsp_url TEXT, presets TEXT NOT NULL DEFAULT '[]',
     command TEXT, command_seq INTEGER NOT NULL DEFAULT 0, updated INTEGER
+  )`);
+  // Plantillas de mezcla reutilizables (layout + texto + logo + promo ya
+  // armados) para no rehacer la combinación cada vez — ver el bloque de
+  // /api/devices/:id/mix en server.js para el formato exacto de cada campo.
+  db.exec(`CREATE TABLE IF NOT EXISTS mix_templates (
+    id TEXT PRIMARY KEY, tenant TEXT NOT NULL REFERENCES tenants(id),
+    name TEXT NOT NULL, layout TEXT NOT NULL, promo TEXT, logo TEXT,
+    text TEXT NOT NULL DEFAULT '', muted INTEGER NOT NULL DEFAULT 0
   )`);
   return db;
 }

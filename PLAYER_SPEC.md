@@ -144,6 +144,39 @@ Autenticación: la mayoría de cámaras ONVIF (incluida Lorex/Dahua) usan
 created + password))` en el header SOAP. Es el detalle que más se les
 olvida a implementaciones caseras de ONVIF y por el que más fallan.
 
+## 4.5 Mezcla sobre la señal en vivo — ya real en `server.js`/`public/mobile/`
+
+A diferencia del PTZ (que sigue siendo solo un buzón de intención hasta que
+exista agente ONVIF), la mezcla **ya es 100% real como control-plane**: el
+panel guarda `devices.mix` (JSON: `{layout,promo,logo,text,muted}`) y lo
+reparte en el manifiesto (`GET /api/player/manifest`) con `promoUrl`/
+`logoUrl` ya resueltos a `/api/player/media/:id`. Lo único que falta es que
+el **reproductor Android** lo lea y componga la imagen de verdad — hoy el
+panel web ya lo compone con CSS sobre el `<iframe>` de la señal en vivo
+(ver `mixOverlayHtml()` en `app.js`), pero eso es solo la vista previa del
+admin, no lo que ve la pantalla física.
+
+- `layout`: `lower` (franja inferior con logo+texto), `split` (panel lateral
+  ~38% con logo+texto+promo de fondo) o `full` (toma completa: promo de
+  fondo + logo + texto centrados).
+- `promo`/`logo`: ids de `assets` del tenant (se validan en cada guardado).
+- `text`: hasta 140 caracteres.
+- Guardar/quitar mezcla sube `revision` como cualquier otro cambio, así que
+  el reproductor la recoge en su próximo poll de 20s como cualquier cambio
+  de playlist.
+- Quitar la fuente en vivo (`live-source` a `null` o a otra URL) borra la
+  mezcla automáticamente — no tiene sentido sin una señal en vivo debajo.
+- Plantillas reutilizables en `mix_templates` (mismo shape + `name`) — el
+  panel las lista y aplica con un toque, y se guardan con "+ Guardar como
+  plantilla" desde la pantalla de mezcla.
+
+Para el reproductor real: al recibir `manifest.mix` no nulo, dibujar sobre
+el `SurfaceView`/`WebView` de la fuente en vivo un layout equivalente —
+`ExoPlayer`/`Canvas` con un `Bitmap` del logo (`logoUrl`) y texto
+(`Paint.drawText`), o más simple, un segundo `WebView` transparente
+superpuesto con el mismo HTML/CSS que ya genera `mixOverlayHtml()` (se
+podría exportar esa función tal cual a un mini HTML local).
+
 ## 5. Vídeo en el reproductor — go2rtc + ExoPlayer
 
 Para mostrar el vídeo (RTSP de la PTZ, o lo que salga de la capturadora)

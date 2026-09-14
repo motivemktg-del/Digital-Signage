@@ -21,6 +21,8 @@ const ui = {
   ptzCameraId: null,  // cámara abierta en viewPtz
   ptzLocal: null,      // { x, y, zoom, presetId } — posición ASUMIDA, sin
                         // confirmación real de la cámara (no hay agente local)
+  mixDeviceId: null,  // pantalla abierta en viewMix
+  mixDraft: null,      // { layout, promo, logo, text, muted } — se guarda con saveMixNow()
 };
 
 let remote = null; // último resultado de getState(): { tenant, role, email, locations, devices, assets, playlists, schedules }
@@ -254,7 +256,50 @@ const actions = {
     if (url === null) return; // canceló
     await run(setLiveSource(id, url.trim() || null), url.trim() ? 'Fuente en vivo asignada' : 'Fuente en vivo quitada');
   },
-  mixSoon() { showToast('Mezclar sobre la señal: próximamente'); },
+  // -- mezclador (backend real: layout+texto+logo+promo sobre la señal en
+  // vivo, ver /api/devices/:id/mix en server.js) --
+  openMix(id) {
+    const d = remote.devices.find(d => d.id === id);
+    if (!d || !d.liveSource) return showToast('Activa una señal en vivo primero', true);
+    ui.mixDeviceId = id;
+    ui.mixDraft = d.mix ? { ...d.mix } : { layout: 'lower', promo: null, logo: null, text: '', muted: false };
+    ui.detailDeviceId = null; ui.route = 'mix'; render();
+  },
+  backFromMix() {
+    const id = ui.mixDeviceId;
+    ui.route = 'content'; ui.mixDeviceId = null; ui.mixDraft = null; ui.detailDeviceId = id; render();
+  },
+  setMixLayout(layout) { ui.mixDraft.layout = layout; render(); },
+  setMixText(_, el) { ui.mixDraft.text = el.value; },
+  toggleMixMuted() { ui.mixDraft.muted = !ui.mixDraft.muted; render(); },
+  setMixPromo(id) { ui.mixDraft.promo = ui.mixDraft.promo === id ? null : id; render(); },
+  async pickMixLogo(_, input) {
+    const file = input.files[0]; if (!file) return;
+    showToast('Subiendo logo…');
+    try { const a = await uploadAsset(file); await refresh(); ui.mixDraft.logo = a.id; render(); }
+    catch (e) { showToast(e.message, true); }
+    input.value = '';
+  },
+  clearMixLogo() { ui.mixDraft.logo = null; render(); },
+  async saveMixNow() { await run(setMix(ui.mixDeviceId, ui.mixDraft), 'Mezcla guardada'); },
+  async clearMixNow() {
+    if (!confirm('¿Quitar la mezcla de esta pantalla?')) return;
+    ui.mixDraft = { layout: 'lower', promo: null, logo: null, text: '', muted: false };
+    await run(clearMix(ui.mixDeviceId), 'Mezcla quitada');
+  },
+  async saveMixTemplateNow() {
+    const name = prompt('Nombre de la plantilla (ej. Happy Hour):'); if (!name) return;
+    await run(createMixTemplate({ name, ...ui.mixDraft }), 'Plantilla guardada');
+  },
+  applyMixTemplate(id) {
+    const t = (remote.mixTemplates || []).find(t => t.id === id); if (!t) return;
+    ui.mixDraft = { layout: t.layout, promo: t.promo, logo: t.logo, text: t.text, muted: !!t.muted };
+    render();
+  },
+  async deleteMixTemplateNow(id) {
+    if (!confirm('¿Eliminar esta plantilla?')) return;
+    await run(deleteMixTemplate(id), 'Plantilla eliminada');
+  },
   async useDefaultPlaylistSource(id) {
     const d = remote.devices.find(d => d.id === id); if (!d.liveSource) return;
     await run(setLiveSource(id, null), 'Fuente en vivo quitada');
@@ -604,6 +649,7 @@ function bigPreview(d) {
   if (d.liveSource) {
     return `<div style="${box}">
       <iframe src="${esc(d.liveSource)}" allow="autoplay" style="position:absolute;inset:0;width:100%;height:100%;border:0" title="stream en vivo"></iframe>
+      ${d.mix ? mixOverlayHtml(d.mix) : ''}
       <div class="badge-live" style="position:absolute;top:10px;left:10px"><div class="dot dot-sm" style="background:var(--red)"></div><span>EN DIRECTO</span></div>
     </div>`;
   }
@@ -626,6 +672,117 @@ function previewThumb(d, a) {
   return a.type.startsWith('image/')
     ? `<img src="${assetMediaUrl(a.id)}" style="${s}">`
     : `<video src="${assetMediaUrl(a.id)}#t=0.5" preload="metadata" muted playsinline style="${s}"></video>`;
+}
+
+// Overlay visual de la mezcla (layout+logo+texto) — se dibuja EN EL PANEL
+// con CSS puro sobre la señal en vivo; el reproductor real compondría la
+// imagen de verdad leyendo este mismo objeto del manifiesto (mix/mixOut en
+// server.js ya manda promoUrl/logoUrl resueltos para eso).
+function mixOverlayHtml(m) {
+  if (!m) return '';
+  const promoAsset = m.promo ? remote.assets.find(a => a.id === m.promo) : null;
+  const logoAsset = m.logo ? remote.assets.find(a => a.id === m.logo) : null;
+  const promoImg = id => `<img src="${assetMediaUrl(id)}" style="position:absolute;inset:0;width:100%;height:100%;object-fit:cover">`;
+  const logoImg = (id, h) => `<img src="${assetMediaUrl(id)}" style="max-height:${h}px;max-width:80%;object-fit:contain">`;
+  const muteTag = m.muted ? `<div style="position:absolute;top:8px;right:8px;padding:3px 7px;border-radius:6px;background:rgba(14,15,18,.8);font:600 9px var(--mono);color:#c4c9cf;z-index:2">🔇 MUDO</div>` : '';
+  if (m.layout === 'full') {
+    return `<div style="position:absolute;inset:0;background:#111;display:flex;align-items:center;justify-content:center">
+      ${promoAsset ? `<div style="position:absolute;inset:0;opacity:.55">${promoImg(promoAsset.id)}</div>` : ''}
+      <div style="position:relative;display:flex;flex-direction:column;align-items:center;gap:8px;padding:0 16px">
+        ${logoAsset ? logoImg(logoAsset.id, 44) : ''}
+        ${m.text ? `<div style="font:700 16px var(--sans);color:#fff;text-shadow:0 1px 4px rgba(0,0,0,.7);text-align:center">${esc(m.text)}</div>` : ''}
+      </div>
+    </div>${muteTag}`;
+  }
+  if (m.layout === 'split') {
+    return `<div style="position:absolute;inset:0;display:flex">
+      <div style="flex:1"></div>
+      <div style="width:38%;background:#111;position:relative;display:flex;align-items:center;justify-content:center">
+        ${promoAsset ? `<div style="position:absolute;inset:0;opacity:.5">${promoImg(promoAsset.id)}</div>` : ''}
+        <div style="position:relative;display:flex;flex-direction:column;align-items:center;gap:6px;padding:0 8px">
+          ${logoAsset ? logoImg(logoAsset.id, 30) : ''}
+          ${m.text ? `<div style="font:700 11px var(--sans);color:#fff;text-align:center;text-shadow:0 1px 3px rgba(0,0,0,.7)">${esc(m.text)}</div>` : ''}
+        </div>
+      </div>
+    </div>${muteTag}`;
+  }
+  // lower
+  return `<div style="position:absolute;left:0;right:0;bottom:0;background:linear-gradient(0deg,rgba(0,0,0,.82),rgba(0,0,0,0));padding:10px 12px 8px;display:flex;align-items:center;gap:8px">
+    ${logoAsset ? `<img src="${assetMediaUrl(logoAsset.id)}" style="height:22px;width:22px;object-fit:contain;border-radius:4px;flex:none">` : ''}
+    ${m.text ? `<div style="flex:1;min-width:0;font:700 12px var(--sans);color:#fff;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(m.text)}</div>` : ''}
+  </div>${muteTag}`;
+}
+
+function viewMix() {
+  const d = remote.devices.find(d => d.id === ui.mixDeviceId);
+  if (!d || !ui.mixDraft) return `<div class="screen"><div class="topbar"><div class="back" ${A('backFromMix')}>‹</div></div><div class="content" style="padding-top:30px;text-align:center;color:var(--ink-faint)">Pantalla no encontrada.</div></div>`;
+  const m = ui.mixDraft;
+  const layouts = [['lower', 'Inferior'], ['split', 'Dividido'], ['full', 'Pantalla completa']];
+  const layoutLabel = { lower: 'inferior', split: 'dividido', full: 'pantalla completa' };
+  const logoAsset = m.logo ? remote.assets.find(a => a.id === m.logo) : null;
+  const images = remote.assets.filter(a => a.type.startsWith('image/'));
+  const templates = remote.mixTemplates || [];
+  return `<div class="screen">
+    <div class="topbar"><div class="back" ${A('backFromMix')}>‹</div><div class="title">Mezclar — ${esc(d.name)}</div></div>
+    <div class="content">
+      <div style="width:100%;aspect-ratio:16/9;border-radius:14px;overflow:hidden;background:#000;position:relative;margin-bottom:16px">
+        <div style="position:absolute;inset:0;display:flex;align-items:center;justify-content:center;font:500 10px var(--mono);color:var(--ink-faint)">señal en vivo</div>
+        ${mixOverlayHtml(m)}
+      </div>
+
+      <div class="eyebrow">Formato</div>
+      <div class="row" style="gap:8px;margin-bottom:18px">
+        ${layouts.map(([v, label]) => `<div class="row-tap" style="flex:1;text-align:center;padding:11px 4px;border-radius:12px;background:${m.layout === v ? 'rgba(47,123,246,.12)' : 'var(--card-2)'};border:1.5px solid ${m.layout === v ? 'var(--accent)' : 'var(--line)'};font:600 11.5px var(--sans)" ${A('setMixLayout', v)}>${label}</div>`).join('')}
+      </div>
+
+      <div class="eyebrow">Texto</div>
+      <input value="${esc(m.text)}" maxlength="140" placeholder="Texto a mostrar (ej. 2x1 en cervezas)" data-input="setMixText" style="width:100%;box-sizing:border-box;padding:11px 13px;border-radius:10px;background:var(--card-2);border:1px solid var(--line);color:var(--ink);margin-bottom:18px">
+
+      <div class="eyebrow">Logo</div>
+      <div class="row" style="gap:10px;align-items:center;margin-bottom:18px">
+        <div style="width:52px;height:52px;border-radius:10px;background:var(--card-2);border:1px solid var(--line);display:flex;align-items:center;justify-content:center;overflow:hidden;flex:none">
+          ${logoAsset ? `<img src="${assetMediaUrl(logoAsset.id)}" style="max-width:100%;max-height:100%;object-fit:contain">` : `<span style="font:400 9px var(--mono);color:var(--ink-faint)">sin logo</span>`}
+        </div>
+        <label class="btn btn-ghost row-tap" style="flex:1;text-align:center;cursor:pointer;font-size:12px">
+          ${logoAsset ? 'Cambiar logo' : 'Subir logo'}
+          <input type="file" accept="image/jpeg,image/png,image/webp" style="display:none" data-change="pickMixLogo">
+        </label>
+        ${logoAsset ? `<div class="row-tap" title="Quitar logo" style="width:36px;height:36px;border-radius:9px;flex:none;display:flex;align-items:center;justify-content:center;background:rgba(242,99,90,.12)" ${A('clearMixLogo')}>🗑️</div>` : ''}
+      </div>
+
+      <div class="eyebrow">Promo de fondo (biblioteca)</div>
+      <div class="grid-2" style="grid-template-columns:repeat(4,1fr);gap:8px;margin-bottom:16px">
+        ${images.length === 0 ? `<div style="grid-column:1/-1;padding:10px 0;text-align:center;color:var(--ink-faint);font:400 11px var(--sans)">Sin imágenes en tu biblioteca.</div>` : images.map(a => `
+        <div class="row-tap" style="position:relative;aspect-ratio:1/1;border-radius:10px;overflow:hidden;border:1.5px solid ${m.promo === a.id ? 'var(--accent)' : 'var(--line)'}" ${A('setMixPromo', a.id)}>
+          <img src="${assetMediaUrl(a.id)}" style="width:100%;height:100%;object-fit:cover">
+          ${m.promo === a.id ? `<div style="position:absolute;inset:0;background:rgba(47,123,246,.28);display:flex;align-items:center;justify-content:center;font:700 14px var(--sans);color:#fff">✓</div>` : ''}
+        </div>`).join('')}
+      </div>
+
+      <div class="row card-flat row-tap" style="padding:12px 14px;margin-bottom:20px" ${A('toggleMixMuted')}>
+        <div style="width:17px;height:17px;border-radius:5px;flex:none;border:1.5px solid ${m.muted ? 'var(--accent)' : 'rgba(255,255,255,.22)'};background:${m.muted ? 'var(--accent)' : 'transparent'};display:flex;align-items:center;justify-content:center;font:700 11px var(--sans);color:#fff">${m.muted ? '✓' : ''}</div>
+        <div style="font:600 13px var(--sans)">Silenciar audio de la señal en vivo</div>
+      </div>
+
+      <div class="row" style="gap:8px;margin-bottom:24px">
+        <div class="btn btn-primary row-tap" style="flex:1;text-align:center" ${A('saveMixNow')}>Guardar mezcla</div>
+        <div class="row-tap" style="padding:12px 16px;border-radius:12px;background:var(--card-2);border:1px solid var(--line);font:600 12.5px var(--sans)" ${A('clearMixNow')}>Quitar</div>
+      </div>
+
+      <div class="row" style="justify-content:space-between;align-items:baseline;margin-bottom:9px">
+        <div class="eyebrow" style="margin:0">Plantillas</div>
+        <div class="row-tap" style="font:600 11px var(--sans);color:var(--accent)" ${A('saveMixTemplateNow')}>+ Guardar como plantilla</div>
+      </div>
+      <div class="stack" style="margin-bottom:16px">
+        ${templates.length === 0 ? `<div style="padding:10px 0;text-align:center;color:var(--ink-faint);font:400 11px var(--sans)">Sin plantillas guardadas.</div>` : templates.map(t => `
+        <div class="row card-flat row-tap" style="padding:11px 13px" ${A('applyMixTemplate', t.id)}>
+          <div style="flex:1;min-width:0"><div style="font:600 12.5px var(--sans);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(t.name)}</div><div style="font:400 10px var(--mono);color:var(--ink-dimmer)">${layoutLabel[t.layout] || t.layout}${t.text ? ' · ' + esc(t.text) : ''}</div></div>
+          <div class="row-tap" title="Eliminar" style="width:28px;height:28px;border-radius:8px;flex:none;display:flex;align-items:center;justify-content:center;background:rgba(242,99,90,.1)" ${A('deleteMixTemplateNow', t.id)}>🗑️</div>
+        </div>`).join('')}
+      </div>
+    </div>
+    ${toastHtml()}
+  </div>`;
 }
 
 function deviceSheet() {
@@ -655,7 +812,7 @@ function deviceSheet() {
         ${d.liveSource ? `<div class="tag" style="background:rgba(242,99,90,.14);color:var(--red)">EN DIRECTO</div>` : ''}
       </div>
     </div>
-    ${d.liveSource ? `<div class="row-tap" style="text-align:center;padding:10px 0;border-radius:12px;background:var(--card-2);border:1px solid var(--line);opacity:.55;font:600 12px var(--sans);margin-bottom:16px" ${A('mixSoon')}>Mezclar sobre la señal (próximamente)</div>` : ''}
+    ${d.liveSource ? `<div class="row-tap" style="text-align:center;padding:10px 0;border-radius:12px;background:${d.mix ? 'rgba(47,123,246,.12)' : 'var(--card-2)'};border:1px solid ${d.mix ? 'var(--accent)' : 'var(--line)'};font:600 12px var(--sans);margin-bottom:16px" ${A('openMix', d.id)}>🎛️ ${d.mix ? 'Editar mezcla' : 'Mezclar sobre la señal'}</div>` : ''}
 
     <div class="eyebrow">Lista de reproducción</div>
     <div class="row" style="gap:8px;margin-bottom:16px">
@@ -1086,6 +1243,7 @@ function render() {
     case 'studio': app.innerHTML = viewStudio(); break;
     case 'studioDraft': app.innerHTML = viewStudioDraft(); break;
     case 'ptz': app.innerHTML = viewPtz(); break;
+    case 'mix': app.innerHTML = viewMix(); break;
     default: app.innerHTML = viewHome();
   }
 }

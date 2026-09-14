@@ -53,6 +53,11 @@ function assignPlaylist(deviceId, playlist) { return api(`/api/devices/${deviceI
 function publishContent(deviceId, payload) { return api(`/api/devices/${deviceId}/content`, { method: 'POST', body: { ...payload, confirm: true } }); }
 function revokeDevice(id) { return api(`/api/devices/${id}`, { method: 'DELETE' }); }
 function setLiveSource(id, url) { return api(`/api/devices/${id}/live-source`, { method: 'POST', body: { url } }); } // url:null quita la fuente en vivo
+function setMix(id, payload) { return api(`/api/devices/${id}/mix`, { method: 'POST', body: payload }); } // {layout,promo,logo,text,muted}
+function clearMix(id) { return api(`/api/devices/${id}/mix`, { method: 'POST', body: { clear: true } }); }
+function listMixTemplates() { return api('/api/mix-templates'); }
+function createMixTemplate(payload) { return api('/api/mix-templates', { method: 'POST', body: payload }); } // {name,layout,promo,logo,text,muted}
+function deleteMixTemplate(id) { return api(`/api/mix-templates/${id}`, { method: 'DELETE' }); }
 
 // ---- emparejar pantalla nueva -------------------------------------------
 

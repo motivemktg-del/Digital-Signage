@@ -17,7 +17,9 @@ const nameOf = value => { if (typeof value !== 'string' || !value.trim() || valu
 export function deviceManifest(db, d, origin) {
  const expand=id=>{const p=db.prepare('SELECT * FROM playlists WHERE id=? AND tenant=?').get(id,d.tenant);return p?JSON.parse(p.items).map(item=>{const a=db.prepare('SELECT * FROM assets WHERE id=? AND tenant=?').get(item.asset,d.tenant);return {id:a.id,sha:a.sha,size:a.size,type:a.type,seconds:item.seconds,url:origin+'/api/player/media/'+a.id};}):[];};
  const schedules=db.prepare('SELECT * FROM schedules WHERE device=? AND tenant=? ORDER BY priority DESC,id ASC').all(d.id,d.tenant).map(s=>({id:s.id,name:s.name,timezone:s.timezone,days:JSON.parse(s.days),start:s.start,end:s.end,fromDate:s.fromDate,toDate:s.toDate,priority:s.priority,items:expand(s.playlist)}));
- const payload={paired:true,name:d.name,paused:!!d.paused,revision:d.revision||0,display:{orientation:d.orientation||'auto',rotation:d.rotation||0,fit:d.fit||'cover'},liveSource:d.live_source||null,items:expand(d.playlist),schedules};return {...payload,version:hash(JSON.stringify(payload))};
+ const assetUrl=id=>{const a=id&&db.prepare('SELECT * FROM assets WHERE id=? AND tenant=?').get(id,d.tenant);return a?origin+'/api/player/media/'+a.id:null;};
+ const mixOut=()=>{if(!d.mix)return null;const m=JSON.parse(d.mix);return {...m,promoUrl:assetUrl(m.promo),logoUrl:assetUrl(m.logo)};};
+ const payload={paired:true,name:d.name,paused:!!d.paused,revision:d.revision||0,display:{orientation:d.orientation||'auto',rotation:d.rotation||0,fit:d.fit||'cover'},liveSource:d.live_source||null,mix:mixOut(),items:expand(d.playlist),schedules};return {...payload,version:hash(JSON.stringify(payload))};
 }
 export function createApp(env = process.env, studioOptions = {}) {
  const data = resolve(env.DATA_DIR || './data'), db = openStore(data), app = express();
@@ -89,7 +91,7 @@ export function createApp(env = process.env, studioOptions = {}) {
   if(db.prepare('SELECT 1 FROM devices WHERE tenant=? AND playlist=?').get(req.user.tenant,req.params.id)||db.prepare('SELECT 1 FROM schedules WHERE tenant=? AND playlist=?').get(req.user.tenant,req.params.id))throw fail(409,'La lista está asignada a una pantalla o un programa. Cambia esa asignación primero.');
   if(!db.prepare('DELETE FROM playlists WHERE id=? AND tenant=?').run(req.params.id,req.user.tenant).changes)throw fail(404,'Lista no encontrada.');res.json({ok:true});
  })));
- app.get('/api/state',admin,(req,res)=>res.json({workspaceId:req.user.tenant,tenant:req.user.name,role:req.user.role,email:req.user.email,locations:db.prepare('SELECT id,name FROM locations WHERE tenant=? ORDER BY name').all(req.user.tenant),devices:db.prepare('SELECT id,tenant,name,playlist,seen,version,error,location,paused,revision,orientation,rotation,fit,live_source AS liveSource FROM devices WHERE tenant=?').all(req.user.tenant).map(d=>({...d,targetVersion:deviceManifest(db,d,origin).version})),assets:db.prepare('SELECT id,name,type,size,sha FROM assets WHERE tenant=? AND archived=0').all(req.user.tenant),playlists:db.prepare('SELECT * FROM playlists WHERE tenant=?').all(req.user.tenant).map(p=>({...p,items:JSON.parse(p.items)})),schedules:db.prepare('SELECT * FROM schedules WHERE tenant=? ORDER BY start,priority DESC').all(req.user.tenant).map(s=>({...s,days:JSON.parse(s.days)})),ptzCameras:db.prepare('SELECT * FROM ptz_cameras WHERE tenant=?').all(req.user.tenant).map(ptzOut)}));
+ app.get('/api/state',admin,(req,res)=>res.json({workspaceId:req.user.tenant,tenant:req.user.name,role:req.user.role,email:req.user.email,locations:db.prepare('SELECT id,name FROM locations WHERE tenant=? ORDER BY name').all(req.user.tenant),devices:db.prepare('SELECT id,tenant,name,playlist,seen,version,error,location,paused,revision,orientation,rotation,fit,live_source AS liveSource,mix FROM devices WHERE tenant=?').all(req.user.tenant).map(d=>({...d,mix:d.mix?JSON.parse(d.mix):null,targetVersion:deviceManifest(db,d,origin).version})),assets:db.prepare('SELECT id,name,type,size,sha FROM assets WHERE tenant=? AND archived=0').all(req.user.tenant),playlists:db.prepare('SELECT * FROM playlists WHERE tenant=?').all(req.user.tenant).map(p=>({...p,items:JSON.parse(p.items)})),schedules:db.prepare('SELECT * FROM schedules WHERE tenant=? ORDER BY start,priority DESC').all(req.user.tenant).map(s=>({...s,days:JSON.parse(s.days)})),ptzCameras:db.prepare('SELECT * FROM ptz_cameras WHERE tenant=?').all(req.user.tenant).map(ptzOut),mixTemplates:db.prepare('SELECT * FROM mix_templates WHERE tenant=? ORDER BY name').all(req.user.tenant).map(t=>({...t,muted:!!t.muted}))}));
  app.post('/api/devices/:id/display',admin,wrap(managed('device.display',async(req,res)=>{
   const {orientation,rotation,fit}=req.body;
   if(!['auto','landscape','portrait'].includes(orientation)||![0,90,180,270].includes(rotation)||!['cover','contain'].includes(fit))throw fail(400,'Configuración de pantalla inválida.');
@@ -103,7 +105,43 @@ export function createApp(env = process.env, studioOptions = {}) {
  app.post('/api/devices/:id/live-source',admin,wrap(managed('device.liveSource',async(req,res)=>{
   const url=req.body.url;
   if(url!==null&&(typeof url!=='string'||!/^https?:\/\/[^\s]{1,500}$/i.test(url)))throw fail(400,'URL inválida. Usa http:// o https://, o deja vacío para quitarla.');
-  if(!db.prepare('UPDATE devices SET live_source=?,revision=revision+1 WHERE id=? AND tenant=?').run(url,req.params.id,req.user.tenant).changes)throw fail(404,'Pantalla no encontrada.');
+  if(!db.prepare('UPDATE devices SET live_source=?,mix=NULL,revision=revision+1 WHERE id=? AND tenant=?').run(url,req.params.id,req.user.tenant).changes)throw fail(404,'Pantalla no encontrada.');
+  res.json({ok:true});
+ })));
+ // Mezcla sobre la señal en vivo — igual que live_source, es control-plane
+ // puro: guardamos la intención (layout + qué promo + si va mudo) y quien
+ // la compone de verdad es el reproductor real, leyendo esto del manifiesto.
+ app.post('/api/devices/:id/mix',admin,wrap(managed('device.mix',async(req,res)=>{
+  const b=req.body;
+  if(b.clear){
+   if(!db.prepare('UPDATE devices SET mix=NULL,revision=revision+1 WHERE id=? AND tenant=?').run(req.params.id,req.user.tenant).changes)throw fail(404,'Pantalla no encontrada.');
+   return res.json({ok:true});
+  }
+  if(!['lower','split','full'].includes(b.layout))throw fail(400,'Elige un formato de mezcla válido.');
+  const asset=(v,label)=>{if(v===null||v===undefined)return null;if(typeof v!=='string'||!db.prepare('SELECT 1 FROM assets WHERE id=? AND tenant=? AND archived=0').get(v,req.user.tenant))throw fail(400,`Elige ${label} de tu biblioteca.`);return v;};
+  const promo=asset(b.promo,'un contenido');
+  const logo=asset(b.logo,'un logo');
+  const text=typeof b.text==='string'?b.text.trim().slice(0,140):'';
+  const dev=db.prepare('SELECT live_source FROM devices WHERE id=? AND tenant=?').get(req.params.id,req.user.tenant);
+  if(!dev)throw fail(404,'Pantalla no encontrada.');
+  if(!dev.live_source)throw fail(409,'Esta pantalla necesita una señal en vivo activa para mezclar sobre ella.');
+  const mix=JSON.stringify({layout:b.layout,promo,logo,text,muted:!!b.muted});
+  db.prepare('UPDATE devices SET mix=?,revision=revision+1 WHERE id=? AND tenant=?').run(mix,req.params.id,req.user.tenant);
+  res.json({ok:true});
+ })));
+ // ---- Plantillas de mezcla — guardan una combinación (layout+texto+logo+promo)
+ // para reusarla en cualquier pantalla, sin rehacerla cada vez.
+ app.get('/api/mix-templates',admin,(req,res)=>res.json(db.prepare('SELECT * FROM mix_templates WHERE tenant=? ORDER BY name').all(req.user.tenant).map(t=>({...t,muted:!!t.muted}))));
+ app.post('/api/mix-templates',admin,wrap(managed('mixTemplate.create',async(req,res)=>{
+  const b=req.body;
+  if(!['lower','split','full'].includes(b.layout))throw fail(400,'Elige un formato de mezcla válido.');
+  const asset=(v,label)=>{if(v===null||v===undefined)return null;if(typeof v!=='string'||!db.prepare('SELECT 1 FROM assets WHERE id=? AND tenant=? AND archived=0').get(v,req.user.tenant))throw fail(400,`Elige ${label} de tu biblioteca.`);return v;};
+  const id=randomUUID();
+  db.prepare('INSERT INTO mix_templates (id,tenant,name,layout,promo,logo,text,muted) VALUES (?,?,?,?,?,?,?,?)').run(id,req.user.tenant,nameOf(b.name),b.layout,asset(b.promo,'un contenido'),asset(b.logo,'un logo'),typeof b.text==='string'?b.text.trim().slice(0,140):'',b.muted?1:0);
+  res.status(201).json({id});
+ })));
+ app.delete('/api/mix-templates/:id',admin,wrap(managed('mixTemplate.delete',async(req,res)=>{
+  if(!db.prepare('DELETE FROM mix_templates WHERE id=? AND tenant=?').run(req.params.id,req.user.tenant).changes)throw fail(404,'Plantilla no encontrada.');
   res.json({ok:true});
  })));
  app.post('/api/pair/start',limit('pair-start',20),wrap(async(req,res)=>{
