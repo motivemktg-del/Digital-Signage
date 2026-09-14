@@ -29,6 +29,10 @@ export function openStore(dir) {
   // Fuente en vivo local (ej. go2rtc en la LAN del local) — reemplaza la
   // lista mientras esté puesta. NULL = usa la lista asignada, como antes.
   if(!columns.includes('live_source'))db.exec('ALTER TABLE devices ADD COLUMN live_source TEXT');
+  // Guarda la ÚLTIMA URL real que se puso, aunque ahora esté "apagada"
+  // (live_source=NULL porque se volvió a Lista de reproducción) — así al
+  // reactivar "Señal en vivo" no hay que volver a escribirla desde cero.
+  if(!columns.includes('live_source_saved'))db.exec('ALTER TABLE devices ADD COLUMN live_source_saved TEXT');
   // Mezcla sobre la señal en vivo: {layout:'lower'|'split'|'full', promo:assetId|null, muted}.
   // Solo tiene sentido con live_source puesto; igual que command en
   // ptz_cameras, es la ÚLTIMA intención — el reproductor real (Android o el

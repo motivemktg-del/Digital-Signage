@@ -284,7 +284,13 @@ const actions = {
   // -- fuente en vivo local (backend real, ver server.js) --
   async setLiveSourceNow(id) {
     const d = remote.devices.find(d => d.id === id);
-    const current = d.liveSource || '';
+    // Si está apagada pero ya había una URL configurada antes, un toque
+    // la reactiva tal cual — no hay que volver a escribirla.
+    if (!d.liveSource && d.liveSourceSaved) {
+      await run(setLiveSource(id, d.liveSourceSaved), 'Fuente en vivo reactivada');
+      return;
+    }
+    const current = d.liveSource || d.liveSourceSaved || '';
     const url = prompt('URL de VIDEO puro de go2rtc (no la página del visor) — ej. http://192.168.1.10:1984/api/stream.mp4?src=mivideo. El panel la trae a través del servidor (evita mixed content y CSP), así que no uses stream.html. Déjalo vacío para quitarla:', current);
     if (url === null) return; // canceló
     await run(setLiveSource(id, url.trim() || null), url.trim() ? 'Fuente en vivo asignada' : 'Fuente en vivo quitada');
@@ -923,7 +929,7 @@ function deviceSheet() {
       </div>
       <div class="row card-flat row-tap" style="padding:13px 14px;background:${d.liveSource ? 'rgba(47,123,246,.12)' : 'var(--card-2)'};border:1.5px solid ${d.liveSource ? 'var(--accent)' : 'var(--line)'}" ${A('setLiveSourceNow', d.id)}>
         <div style="width:17px;height:17px;border-radius:50%;flex:none;border:1.5px solid ${d.liveSource ? 'var(--accent)' : 'rgba(255,255,255,.22)'};display:flex;align-items:center;justify-content:center"><div style="width:8px;height:8px;border-radius:50%;background:${d.liveSource ? 'var(--accent)' : 'transparent'}"></div></div>
-        <div style="flex:1;min-width:0"><div style="font:600 13px var(--sans);margin-bottom:2px">Señal en vivo (LAN)</div><div style="font:400 10.5px var(--mono);color:var(--ink-dimmer);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${d.liveSource ? esc(d.liveSource) : 'toca para configurar'}</div></div>
+        <div style="flex:1;min-width:0"><div style="font:600 13px var(--sans);margin-bottom:2px">Señal en vivo (LAN)</div><div style="font:400 10.5px var(--mono);color:var(--ink-dimmer);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${d.liveSource ? esc(d.liveSource) : d.liveSourceSaved ? 'toca para reactivar: ' + esc(d.liveSourceSaved) : 'toca para configurar'}</div></div>
         ${d.liveSource ? `<div class="tag" style="background:rgba(242,99,90,.14);color:var(--red)">EN DIRECTO</div>` : ''}
       </div>
       <div class="row card-flat row-tap" style="padding:13px 14px;opacity:.5" ${A('onvifSoon')}>
