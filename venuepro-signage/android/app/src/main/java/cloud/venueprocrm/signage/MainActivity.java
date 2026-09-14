@@ -68,10 +68,15 @@ public class MainActivity extends Activity {
  private static org.webrtc.PeerConnectionFactory webrtcFactory;
  private static org.webrtc.EglBase webrtcEglBase;
  private org.webrtc.PeerConnection webrtcPc;
- // TextureViewRenderer, NO SurfaceViewRenderer — ver la nota larga en
- // playLiveWebrtc() de por qué. Mismo paquete org.webrtc, mismas
- // interfaces (VideoSink/RendererCommon), solo cambia cómo dibuja.
- private org.webrtc.TextureViewRenderer webrtcRenderer;
+ // PlayerVideoRenderer (clase propia, definida más abajo), NO
+ // SurfaceViewRenderer — ver la nota larga en playLiveWebrtc() de por qué.
+ // io.getstream:stream-webrtc-android NO trae org.webrtc.TextureViewRenderer
+ // (se intentó usarla directo — CI no compiló, "cannot find symbol": este
+ // fork de la librería solo empaqueta SurfaceViewRenderer). Por eso hay una
+ // reimplementación mínima acá mismo, sobre EglRenderer (esa sí es pública
+ // en esta versión y trae createEglSurface(SurfaceTexture), justo lo que
+ // usa por dentro el TextureViewRenderer real de libwebrtc).
+ private PlayerVideoRenderer webrtcRenderer;
  // Overlay del mix (logo/promo/texto) — antes SOLO existía como preview
  // CSS en el panel web (mixOverlayHtml() en app.js), nunca se dibujaba en
  // la pantalla real. Es HERMANO de "canvas" dentro de "root" (no hijo),
@@ -97,10 +102,25 @@ public class MainActivity extends Activity {
  // igual con la lista normal de fotos/videos.
  private FrameLayout alertOverlay;
  private Runnable alertBlinkRunnable;
+ // Etiqueta de diagnóstico TEMPORAL — mientras se investiga por qué el mix
+ // no aparece en cierta pantalla física. Muestra qué camino de video está
+ // activo de verdad (webrtc/rtsp/mp4/foto) y si el overlay del mix se armó
+ // en este momento, así la próxima prueba da evidencia real en vez de
+ // seguir adivinando a ciegas. Chica, gris, esquina superior izquierda —
+ // se puede quitar una vez resuelto el bug de una vez por todas.
+ private TextView debugTag;
+ private void updateDebugTag(){
+  if(debugTag==null)return;
+  String path=webrtcRenderer!=null?"webrtc":exoPlayer!=null?"rtsp":mediaPlayer!=null?"mp4":photo!=null?"foto":"—";
+  debugTag.setText(path+" · mix:"+(mixOverlay!=null?"sí":"no"));
+  debugTag.bringToFront();
+ }
  @Override public void onCreate(Bundle b){super.onCreate(b);
   getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
   getWindow().getDecorView().setSystemUiVisibility(View.SYSTEM_UI_FLAG_FULLSCREEN|View.SYSTEM_UI_FLAG_HIDE_NAVIGATION|View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY);
   root=new FrameLayout(this);root.setBackgroundColor(Color.BLACK);setContentView(root);root.setClipChildren(true);root.addOnLayoutChangeListener((v,l,t,r,bottom,ol,ot,or,ob)->{if(r-l!=or-ol||bottom-t!=ob-ot)layoutDisplay();});
+  debugTag=new TextView(this);debugTag.setTextColor(Color.argb(180,200,205,210));debugTag.setTextSize(9);debugTag.setBackgroundColor(Color.argb(140,0,0,0));debugTag.setPadding(6,3,6,3);
+  root.addView(debugTag,new FrameLayout.LayoutParams(FrameLayout.LayoutParams.WRAP_CONTENT,FrameLayout.LayoutParams.WRAP_CONTENT,Gravity.TOP|Gravity.START));
   assets=new File(getFilesDir(),"media");assets.mkdirs();
   secret=getPreferences(0).getString("secret","");
   try{current=new JSONObject(new String(new AtomicFile(new File(getFilesDir(),"manifest.json")).readFully(),StandardCharsets.UTF_8));version=current.getString("version");liveSource=current.optString("liveSource","");liveSourceRtsp=current.optString("liveSourceRtsp","");liveSourceWebrtc=current.optString("liveSourceWebrtc","");}catch(Exception ignored){}
@@ -217,7 +237,7 @@ public class MainActivity extends Activity {
   }
   return manifest.getJSONArray("items");
  }
- private void stopPlayback(){ui.removeCallbacks(advance);if(alertBlinkRunnable!=null){ui.removeCallbacks(alertBlinkRunnable);alertBlinkRunnable=null;}if(mediaPlayer!=null){mediaPlayer.release();mediaPlayer=null;}if(exoPlayer!=null){exoPlayer.release();exoPlayer=null;}if(webrtcPc!=null){webrtcPc.close();webrtcPc=null;}if(webrtcRenderer!=null){webrtcRenderer.release();webrtcRenderer=null;}video=null;canvas=null;videoWidth=0;videoHeight=0;if(photo!=null){photo.setImageDrawable(null);photo=null;}mixOverlay=null;lastMixJson=null;alertOverlay=null;livePlayingUrl="";playing=false;root.removeAllViews();}
+ private void stopPlayback(){ui.removeCallbacks(advance);if(alertBlinkRunnable!=null){ui.removeCallbacks(alertBlinkRunnable);alertBlinkRunnable=null;}if(mediaPlayer!=null){mediaPlayer.release();mediaPlayer=null;}if(exoPlayer!=null){exoPlayer.release();exoPlayer=null;}if(webrtcPc!=null){webrtcPc.close();webrtcPc=null;}if(webrtcRenderer!=null){webrtcRenderer.release();webrtcRenderer=null;}video=null;canvas=null;videoWidth=0;videoHeight=0;if(photo!=null){photo.setImageDrawable(null);photo=null;}mixOverlay=null;lastMixJson=null;alertOverlay=null;livePlayingUrl="";playing=false;root.removeAllViews();if(debugTag!=null)root.addView(debugTag);updateDebugTag();}
  // Si el manifiesto trae liveSourceWebrtc, se intenta ESA primero — WebRTC
  // puede pedirle un keyframe al encoder al conectarse, cosa que RTSP no
  // puede hacer (solo espera al próximo programado). Si no logra conectar
@@ -257,6 +277,50 @@ public class MainActivity extends Activity {
    public boolean onSurfaceTextureDestroyed(SurfaceTexture texture){return true;}
    public void onSurfaceTextureUpdated(SurfaceTexture texture){}
   });
+ }
+ // Reemplazo mínimo de org.webrtc.TextureViewRenderer — esta versión de la
+ // librería (io.getstream:stream-webrtc-android) no la trae, solo empaqueta
+ // SurfaceViewRenderer (ver la nota larga en playLiveWebrtc()). Implementa
+ // SOLO lo que este archivo realmente usa (onFrame() como VideoSink +
+ // setScalingType(), nada de RendererEvents — el código de abajo tampoco
+ // los usaba con SurfaceViewRenderer, se le pasaba "null"). Construida
+ // sobre EglRenderer, que SÍ es pública acá y trae
+ // createEglSurface(SurfaceTexture) — exactamente lo que hace por dentro
+ // el TextureViewRenderer real de libwebrtc; esto es una copia fiel y
+ // reducida de esa clase, no una reinvención.
+ private static final class PlayerVideoRenderer extends TextureView implements TextureView.SurfaceTextureListener, org.webrtc.VideoSink {
+  private final org.webrtc.RendererCommon.VideoLayoutMeasure videoLayoutMeasure=new org.webrtc.RendererCommon.VideoLayoutMeasure();
+  private final org.webrtc.EglRenderer eglRenderer=new org.webrtc.EglRenderer("PlayerVideoRenderer");
+  private final Object layoutLock=new Object();
+  private int rotatedFrameWidth,rotatedFrameHeight;
+  PlayerVideoRenderer(android.content.Context context){super(context);setSurfaceTextureListener(this);}
+  void init(org.webrtc.EglBase.Context sharedContext){eglRenderer.init(sharedContext,org.webrtc.EglBase.CONFIG_PLAIN,new org.webrtc.GlRectDrawer());}
+  void release(){eglRenderer.release();}
+  void setScalingType(org.webrtc.RendererCommon.ScalingType scalingType){synchronized(layoutLock){videoLayoutMeasure.setScalingType(scalingType);}requestLayout();}
+  @Override public void onFrame(org.webrtc.VideoFrame frame){
+   synchronized(layoutLock){rotatedFrameWidth=frame.getRotatedWidth();rotatedFrameHeight=frame.getRotatedHeight();}
+   eglRenderer.onFrame(frame);
+  }
+  @Override protected void onMeasure(int widthSpec,int heightSpec){
+   android.graphics.Point size;synchronized(layoutLock){size=videoLayoutMeasure.measure(widthSpec,heightSpec,rotatedFrameWidth,rotatedFrameHeight);}
+   setMeasuredDimension(size.x,size.y);
+  }
+  @Override protected void onLayout(boolean changed,int left,int top,int right,int bottom){eglRenderer.setLayoutAspectRatio((right-left)/(float)Math.max(1,bottom-top));}
+  @Override public void onSurfaceTextureAvailable(android.graphics.SurfaceTexture texture,int width,int height){eglRenderer.createEglSurface(texture);}
+  @Override public void onSurfaceTextureSizeChanged(android.graphics.SurfaceTexture texture,int width,int height){}
+  @Override public boolean onSurfaceTextureDestroyed(android.graphics.SurfaceTexture texture){
+   final java.util.concurrent.CountDownLatch latch=new java.util.concurrent.CountDownLatch(1);
+   eglRenderer.releaseEglSurface(latch::countDown);
+   // Espera acotada, no indefinida — esto puede llamarse DESPUÉS de
+   // release() (el renderer ya se soltó en stopPlayback() antes de que
+   // Android decida destruir la SurfaceTexture al desprender la vista), y
+   // no vale la pena arriesgar congelar la pantalla entera esperando a un
+   // hilo que ya pudo haberse detenido. 2s sobra de sobra para un cierre
+   // normal de GL, que es casi instantáneo.
+   try{latch.await(2,java.util.concurrent.TimeUnit.SECONDS);}catch(InterruptedException e){Thread.currentThread().interrupt();}
+   return true;
+  }
+  @Override public void onSurfaceTextureUpdated(android.graphics.SurfaceTexture texture){}
  }
  // SdpObserver con métodos vacíos — la interfaz de WebRTC exige los 4,
  // pero la mayoría de las veces solo hace falta reaccionar a uno.
@@ -315,8 +379,8 @@ public class MainActivity extends Activity {
   // exigente) no se nota, y es la única forma de garantizar que el mix se
   // vea sin depender de cómo cada fabricante de TV box implementó su
   // compositor de video.
-  webrtcRenderer=new org.webrtc.TextureViewRenderer(this);
-  webrtcRenderer.init(webrtcEglBase.getEglBaseContext(),null);
+  webrtcRenderer=new PlayerVideoRenderer(this);
+  webrtcRenderer.init(webrtcEglBase.getEglBaseContext());
   canvas.addView(webrtcRenderer,new FrameLayout.LayoutParams(-1,-1,Gravity.CENTER));
   layoutDisplay(); // fija el scalingType (cover/contain) del renderer recién creado
   final boolean[] gaveUp={false};
@@ -522,6 +586,7 @@ public class MainActivity extends Activity {
   // "root", así que FrameLayout la dibuja arriba de todo lo demás.
   syncAlertOverlay();
   if(alertOverlay!=null){alertOverlay.setLayoutParams(new FrameLayout.LayoutParams(w,h,Gravity.CENTER));alertOverlay.setRotation(angle);}
+  updateDebugTag();
  }
  // Agrega/reconstruye/quita la alerta de emergencia según el manifiesto
  // actual — mismo patrón que syncMixOverlay(), pero SIN el chequeo de
