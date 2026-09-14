@@ -45,12 +45,28 @@ jobs:
 
       - name: Cachear Gradle (usa el wrapper del repo, ./gradlew)
         uses: gradle/actions/setup-gradle@v4
-        with:
-          build-root-directory: venuepro-signage/android
 
       - name: Compilar APK de depuración
+        id: build
         working-directory: venuepro-signage/android
-        run: ./gradlew assembleDebug --no-daemon
+        run: ./gradlew assembleDebug --no-daemon --stacktrace > /tmp/gradle-build.log 2>&1
+        continue-on-error: true
+
+      # Si falla, el log completo vive en el storage de logs de Actions (a
+      # veces no accesible desde entornos con salida de red restringida) —
+      # esto vuelca la cola como anotaciones del check, que sí se leen por
+      # la API normal de GitHub sin pasar por ese storage.
+      - name: Mostrar el error de compilación como anotaciones (si falló)
+        if: steps.build.outcome == 'failure'
+        run: |
+          echo "::group::Cola del log de Gradle"
+          tail -n 200 /tmp/gradle-build.log
+          echo "::endgroup::"
+          tail -n 25 /tmp/gradle-build.log | while IFS= read -r line; do
+            esc=$(printf '%s' "$line" | sed 's/%/%25/g; s/\r/%0D/g; s/\n/%0A/g')
+            echo "::error::$esc"
+          done
+          exit 1
 
       - name: Publicar el APK donde el backend lo sirve y refrescar SHA256SUMS
         run: |
