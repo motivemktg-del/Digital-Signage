@@ -1,0 +1,23 @@
+{
+  "go2rtc_url": "http://192.168.12.224:1984",
+  "stream": "mivideo",
+  "signage_api": "https://ds.venueprocrm.cloud",
+  "signage_email": "bot-mezcla@tu-tenant.com",
+  "signage_password": "usa-una-contraseña-larga-solo-para-este-bot",
+  "device_id": "pega-aquí-el-id-de-la-pantalla",
+  "promo_asset_id": "pega-aquí-el-id-del-asset-de-tu-promo",
+  "promo_logo_asset_id": "",
+  "promo_text": "2x1 en cervezas",
+  "promo_layout": "full",
+  "muted_during_ad": false,
+  "poll_interval_ms": 700,
+  "min_ad_seconds": 3,
+  "min_live_seconds": 3,
+  "black_luma_threshold": 24,
+  "bug_roi": "0.02,0.85,0.18,0.12",
+  "bug_diff_threshold": 0.35,
+  "cutrate_window_seconds": 4,
+  "cutrate_diff_threshold": 40,
+  "cutrate_cuts_threshold": 3,
+  "votes_needed": 2
+}

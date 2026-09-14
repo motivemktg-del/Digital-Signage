@@ -177,6 +177,20 @@ el `SurfaceView`/`WebView` de la fuente en vivo un layout equivalente —
 superpuesto con el mismo HTML/CSS que ya genera `mixOverlayHtml()` (se
 podría exportar esa función tal cual a un mini HTML local).
 
+### 4.5.1 Disparador automático: detector de corte comercial (ya existe)
+
+`venuepro-signage/local-agent/ad-break-detector/` — add-on de Home
+Assistant que mira los cuadros de go2rtc, detecta con heurísticas de
+imagen (cuadro negro + "bug" del canal ausente + tasa de cortes de plano)
+cuándo entra un corte comercial, y llama `POST /api/devices/:id/mix` /
+`clear` solo — es lo que activa/quita la mezcla sin que el admin lo haga
+a mano. Pensado para mostrar la promo PROPIA del local durante el corte
+(no para vender ese espacio a terceros anunciantes — ver el README de esa
+carpeta y la nota legal ahí). Necesita calibrarse por canal/liga
+(`--calibrate`) y tiene 12 pruebas unitarias sobre las heurísticas puras y
+la máquina de estados (sin red, con imágenes sintéticas) — la precisión
+real contra un feed de cable de verdad todavía no está validada en campo.
+
 ## 5. Vídeo en el reproductor — go2rtc + ExoPlayer
 
 Para mostrar el vídeo (RTSP de la PTZ, o lo que salga de la capturadora)

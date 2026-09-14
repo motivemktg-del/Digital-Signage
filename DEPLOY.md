@@ -41,3 +41,10 @@ el backend, no lo repito aquí.
 
 Ver `PLAYER_SPEC.md` — el módulo de fuentes en vivo (capturadoras SDI/HDMI,
 cámaras PTZ) es trabajo nuevo, no existe todavía en el backend real.
+
+## Agente local: detector de corte comercial
+
+`venuepro-signage/local-agent/ad-break-detector/` es un add-on de Home
+Assistant (no se despliega en el VPS — corre en el Mini PC de cada
+ubicación, junto a go2rtc). Ver el README de esa carpeta para instalarlo
+y calibrarlo.
