@@ -82,6 +82,9 @@ function archiveAsset(id) { return api(`/api/assets/${id}`, { method: 'DELETE' }
 function listAssetFolders() { return api('/api/asset-folders'); }
 function createAssetFolder(name) { return api('/api/asset-folders', { method: 'POST', body: { name } }); }
 function deleteAssetFolder(id) { return api(`/api/asset-folders/${id}`, { method: 'DELETE' }); }
+function listChannels() { return api('/api/channels'); }
+function createChannel(payload) { return api('/api/channels', { method: 'POST', body: payload } ); } // {name, location, url}
+function deleteChannel(id) { return api(`/api/channels/${id}`, { method: 'DELETE' }); }
 function setAssetFolder(assetId, folder) { return api(`/api/assets/${assetId}/folder`, { method: 'POST', body: { folder } }); } // folder:null lo saca de la carpeta
 function assetMediaUrl(id) { return `/api/assets/${id}/media`; } // <img>/<video> same-origin, manda cookie sola
 

@@ -182,7 +182,6 @@ const actions = {
     if (!confirm('¿Eliminar este encuadre guardado?')) return;
     await run(deletePtzPreset(ui.ptzCameraId, presetId), 'Encuadre eliminado');
   },
-  onvifSoon() { showToast('Canal ONVIF: próximamente'); },
   openLocation(id) { ui.currentLocationId = id; ui.route = 'locationDetail'; render(); },
 
   // -- estudio IA --
@@ -281,19 +280,31 @@ const actions = {
     }, 'image/png');
   },
 
-  // -- fuente en vivo local (backend real, ver server.js) --
-  async setLiveSourceNow(id) {
-    const d = remote.devices.find(d => d.id === id);
-    // Si está apagada pero ya había una URL configurada antes, un toque
-    // la reactiva tal cual — no hay que volver a escribirla.
-    if (!d.liveSource && d.liveSourceSaved) {
-      await run(setLiveSource(id, d.liveSourceSaved), 'Fuente en vivo reactivada');
-      return;
+  // -- canales (fuente en vivo configurada UNA vez por ubicación, no en
+  // cada pantalla — ver server.js /api/channels). La ficha de pantalla
+  // solo prende/apaga un switch por canal disponible en su ubicación.
+  async newChannel() {
+    const name = prompt('Nombre del canal (ej. Digital Signage, TV Bar):'); if (!name) return;
+    let location = null;
+    if (remote.locations.length > 0) {
+      const list = remote.locations.map((l, i) => `${i + 1}. ${l.name}`).join('\n');
+      const pick = prompt(`¿Ubicación?\n${list}\n\nEscribe el número (vacío = sin ubicación):`);
+      if (pick && remote.locations[Number(pick) - 1]) location = remote.locations[Number(pick) - 1].id;
     }
-    const current = d.liveSource || d.liveSourceSaved || '';
-    const url = prompt('URL de VIDEO puro de go2rtc (no la página del visor) — ej. http://192.168.1.10:1984/api/stream.mp4?src=mivideo. El panel la trae a través del servidor (evita mixed content y CSP), así que no uses stream.html. Déjalo vacío para quitarla:', current);
-    if (url === null) return; // canceló
-    await run(setLiveSource(id, url.trim() || null), url.trim() ? 'Fuente en vivo asignada' : 'Fuente en vivo quitada');
+    const url = prompt('URL de VIDEO puro de go2rtc (no la página del visor) — ej. http://192.168.1.10:1984/api/stream.mp4?src=mivideo:'); if (!url) return;
+    await run(createChannel({ name, location, url }), 'Canal creado');
+  },
+  async deleteChannelNow(id) {
+    if (!confirm('¿Eliminar este canal? Las pantallas que lo tengan activo se quedarán sin fuente.')) return;
+    await run(deleteChannel(id), 'Canal eliminado');
+  },
+  async toggleChannel(arg) {
+    const [deviceId, channelId] = arg.split(':');
+    const d = remote.devices.find(d => d.id === deviceId);
+    const c = remote.channels.find(c => c.id === channelId);
+    if (!d || !c) return;
+    const on = d.liveSource === c.url;
+    await run(setLiveSource(deviceId, on ? null : c.url), on ? 'Canal apagado' : 'Canal activado');
   },
   // -- mezclador (backend real: layout+texto+logo+promo sobre la señal en
   // vivo, ver /api/devices/:id/mix en server.js) --
@@ -578,7 +589,7 @@ function viewHome() {
     ${topbar('Pantallas')}
     <div class="content">
       <div class="row" style="gap:8px;margin-bottom:10px">
-        <div class="btn btn-primary" style="flex:1;padding:12px 0;font-size:13px" ${A('startPairing')}>+ Emparejar pantalla</div>
+        <div class="row-tap" style="flex:1;text-align:center;padding:11px 0;border-radius:12px;background:var(--card-2);border:1px solid var(--line);font:600 12.5px var(--sans);color:var(--ink-dim)" ${A('startPairing')}>+ Emparejar pantalla</div>
       </div>
       <div class="row row-tap card-flat" style="padding:11px 13px;margin-bottom:16px" ${A('goLocations')}>
         <div style="flex:1;min-width:0;font:500 12.5px var(--sans);color:var(--ink-dim)">📍 ${remote.locations.length} ubicacion${remote.locations.length === 1 ? '' : 'es'}</div>
@@ -927,15 +938,21 @@ function deviceSheet() {
         <div style="width:17px;height:17px;border-radius:50%;flex:none;border:1.5px solid ${!d.liveSource ? 'var(--accent)' : 'rgba(255,255,255,.22)'};display:flex;align-items:center;justify-content:center"><div style="width:8px;height:8px;border-radius:50%;background:${!d.liveSource ? 'var(--accent)' : 'transparent'}"></div></div>
         <div style="flex:1;min-width:0"><div style="font:600 13px var(--sans);margin-bottom:2px">Lista de reproducción</div><div style="font:400 10.5px var(--mono);color:var(--ink-dimmer)">${playlist ? esc(playlist.name) : 'sin asignar'}</div></div>
       </div>
-      <div class="row card-flat row-tap" style="padding:13px 14px;background:${d.liveSource ? 'rgba(47,123,246,.12)' : 'var(--card-2)'};border:1.5px solid ${d.liveSource ? 'var(--accent)' : 'var(--line)'}" ${A('setLiveSourceNow', d.id)}>
-        <div style="width:17px;height:17px;border-radius:50%;flex:none;border:1.5px solid ${d.liveSource ? 'var(--accent)' : 'rgba(255,255,255,.22)'};display:flex;align-items:center;justify-content:center"><div style="width:8px;height:8px;border-radius:50%;background:${d.liveSource ? 'var(--accent)' : 'transparent'}"></div></div>
-        <div style="flex:1;min-width:0"><div style="font:600 13px var(--sans);margin-bottom:2px">Señal en vivo (LAN)</div><div style="font:400 10.5px var(--mono);color:var(--ink-dimmer);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${d.liveSource ? esc(d.liveSource) : d.liveSourceSaved ? 'toca para reactivar: ' + esc(d.liveSourceSaved) : 'toca para configurar'}</div></div>
-        ${d.liveSource ? `<div class="tag" style="background:rgba(242,99,90,.14);color:var(--red)">EN DIRECTO</div>` : ''}
-      </div>
-      <div class="row card-flat row-tap" style="padding:13px 14px;opacity:.5" ${A('onvifSoon')}>
-        <div style="width:17px;height:17px;border-radius:50%;flex:none;border:1.5px solid rgba(255,255,255,.22)"></div>
-        <div style="flex:1;min-width:0"><div style="font:600 13px var(--sans);margin-bottom:2px">Canal ONVIF</div><div style="font:400 10.5px var(--mono);color:var(--ink-dimmer)">próximamente</div></div>
-      </div>
+      ${(() => {
+        const chans = (remote.channels || []).filter(c => c.location === d.location);
+        if (chans.length === 0) return `<div class="row card-flat row-tap" style="padding:13px 14px;opacity:.6" ${A('goTab', 'content')}>
+          <div style="flex:1;min-width:0"><div style="font:600 13px var(--sans);margin-bottom:2px">Sin canales</div><div style="font:400 10.5px var(--mono);color:var(--ink-dimmer)">configúralos en Contenido → Canales</div></div>
+        </div>`;
+        return chans.map(c => {
+          const on = d.liveSource === c.url;
+          return `<div class="row card-flat row-tap" style="padding:13px 14px;background:${on ? 'rgba(47,123,246,.12)' : 'var(--card-2)'};border:1.5px solid ${on ? 'var(--accent)' : 'var(--line)'}" ${A('toggleChannel', `${d.id}:${c.id}`)}>
+            <div style="flex:1;min-width:0"><div style="font:600 13px var(--sans);margin-bottom:2px">${esc(c.name)}</div>${on ? `<div class="tag" style="background:rgba(242,99,90,.14);color:var(--red);display:inline-block">EN DIRECTO</div>` : ''}</div>
+            <div style="width:44px;height:26px;border-radius:13px;background:${on ? 'var(--accent)' : 'var(--card-2)'};border:1px solid var(--line);position:relative;flex:none">
+              <div style="position:absolute;top:2px;left:${on ? '20px' : '2px'};width:20px;height:20px;border-radius:50%;background:#fff;transition:left .15s;box-shadow:0 1px 3px rgba(0,0,0,.3)"></div>
+            </div>
+          </div>`;
+        }).join('');
+      })()}
     </div>
     ${d.liveSource ? `<div class="row-tap" style="text-align:center;padding:10px 0;border-radius:12px;background:${d.mix ? 'rgba(47,123,246,.12)' : 'var(--card-2)'};border:1px solid ${d.mix ? 'var(--accent)' : 'var(--line)'};font:600 12px var(--sans);margin-bottom:10px" ${A('openMix', d.id)}>🎛️ ${d.mix ? 'Editar mezcla' : 'Mezclar sobre la señal'}</div>` : ''}
     ${remote.ptzCameras.some(c => c.location === d.location) ? `<div class="row-tap" style="text-align:center;padding:10px 0;border-radius:12px;background:var(--card-2);border:1px solid var(--line);font:600 12px var(--sans);margin-bottom:16px" ${A('openPtzFromDevice', d.id)}>📹 Control PTZ</div>` : ''}
@@ -1091,6 +1108,23 @@ function viewContent() {
           <div class="row-tap" style="font:500 11px var(--sans);color:var(--ink-dim);margin-right:12px" ${A('editPlaylist', p.id)}>Editar</div>
           <div class="row-tap" style="font:500 11px var(--sans);color:var(--red)" ${A('deletePlaylistNow', p.id)}>Eliminar</div>
         </div>`).join('')}
+      </div>
+
+      <div class="row" style="justify-content:space-between;align-items:baseline;margin-bottom:11px">
+        <div class="eyebrow" style="margin:0">Canales</div>
+        <div class="row-tap" style="font:600 11.5px var(--sans);color:var(--accent)" ${A('newChannel')}>+ Nuevo</div>
+      </div>
+      <div class="stack" style="margin-bottom:22px">
+        ${(remote.channels || []).length === 0 ? `<div style="padding:16px 0;text-align:center;color:var(--ink-faint);font:400 12px var(--sans)">Sin canales todavía — configura uno para que las pantallas de esa ubicación puedan prenderlo como fuente.</div>` : remote.channels.map(c => {
+          const loc = remote.locations.find(l => l.id === c.location);
+          return `<div class="card row" style="padding:12px 14px">
+            <div style="flex:1;min-width:0">
+              <div style="font:600 12.5px var(--sans)">${esc(c.name)}</div>
+              <div style="font:400 10px var(--mono);color:var(--ink-dimmer);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${loc ? esc(loc.name) : 'sin ubicación'} · ${esc(c.url)}</div>
+            </div>
+            <div class="row-tap" title="Eliminar" ${A('deleteChannelNow', c.id)}>🗑️</div>
+          </div>`;
+        }).join('')}
       </div>
 
       <div class="eyebrow">Biblioteca</div>

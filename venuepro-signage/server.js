@@ -161,7 +161,7 @@ export function createApp(env = process.env, studioOptions = {}) {
   if(db.prepare('SELECT 1 FROM devices WHERE tenant=? AND playlist=?').get(req.user.tenant,req.params.id)||db.prepare('SELECT 1 FROM schedules WHERE tenant=? AND playlist=?').get(req.user.tenant,req.params.id))throw fail(409,'La lista está asignada a una pantalla o un programa. Cambia esa asignación primero.');
   if(!db.prepare('DELETE FROM playlists WHERE id=? AND tenant=?').run(req.params.id,req.user.tenant).changes)throw fail(404,'Lista no encontrada.');res.json({ok:true});
  })));
- app.get('/api/state',admin,(req,res)=>res.json({workspaceId:req.user.tenant,tenant:req.user.name,role:req.user.role,email:req.user.email,locations:db.prepare('SELECT id,name FROM locations WHERE tenant=? ORDER BY name').all(req.user.tenant),devices:db.prepare('SELECT id,tenant,name,playlist,seen,version,error,location,paused,revision,orientation,rotation,fit,live_source AS liveSource,live_source_saved AS liveSourceSaved,mix FROM devices WHERE tenant=?').all(req.user.tenant).map(d=>({...d,mix:d.mix?JSON.parse(d.mix):null,targetVersion:deviceManifest(db,d,origin).version})),assets:db.prepare('SELECT id,name,type,size,sha,folder FROM assets WHERE tenant=? AND archived=0').all(req.user.tenant),assetFolders:db.prepare('SELECT * FROM asset_folders WHERE tenant=? ORDER BY name').all(req.user.tenant),playlists:db.prepare('SELECT * FROM playlists WHERE tenant=?').all(req.user.tenant).map(p=>({...p,items:JSON.parse(p.items)})),schedules:db.prepare('SELECT * FROM schedules WHERE tenant=? ORDER BY start,priority DESC').all(req.user.tenant).map(s=>({...s,days:JSON.parse(s.days)})),ptzCameras:db.prepare('SELECT * FROM ptz_cameras WHERE tenant=?').all(req.user.tenant).map(ptzOut),mixTemplates:db.prepare('SELECT * FROM mix_templates WHERE tenant=? ORDER BY name').all(req.user.tenant).map(t=>({...t,muted:!!t.muted}))}));
+ app.get('/api/state',admin,(req,res)=>res.json({workspaceId:req.user.tenant,tenant:req.user.name,role:req.user.role,email:req.user.email,locations:db.prepare('SELECT id,name FROM locations WHERE tenant=? ORDER BY name').all(req.user.tenant),devices:db.prepare('SELECT id,tenant,name,playlist,seen,version,error,location,paused,revision,orientation,rotation,fit,live_source AS liveSource,live_source_saved AS liveSourceSaved,mix FROM devices WHERE tenant=?').all(req.user.tenant).map(d=>({...d,mix:d.mix?JSON.parse(d.mix):null,targetVersion:deviceManifest(db,d,origin).version})),assets:db.prepare('SELECT id,name,type,size,sha,folder FROM assets WHERE tenant=? AND archived=0').all(req.user.tenant),assetFolders:db.prepare('SELECT * FROM asset_folders WHERE tenant=? ORDER BY name').all(req.user.tenant),playlists:db.prepare('SELECT * FROM playlists WHERE tenant=?').all(req.user.tenant).map(p=>({...p,items:JSON.parse(p.items)})),schedules:db.prepare('SELECT * FROM schedules WHERE tenant=? ORDER BY start,priority DESC').all(req.user.tenant).map(s=>({...s,days:JSON.parse(s.days)})),ptzCameras:db.prepare('SELECT * FROM ptz_cameras WHERE tenant=?').all(req.user.tenant).map(ptzOut),mixTemplates:db.prepare('SELECT * FROM mix_templates WHERE tenant=? ORDER BY name').all(req.user.tenant).map(t=>({...t,muted:!!t.muted})),channels:db.prepare('SELECT * FROM channels WHERE tenant=? ORDER BY name').all(req.user.tenant)}));
  app.post('/api/devices/:id/display',admin,wrap(managed('device.display',async(req,res)=>{
   const {orientation,rotation,fit}=req.body;
   if(!['auto','landscape','portrait'].includes(orientation)||![0,90,180,270].includes(rotation)||!['cover','contain'].includes(fit))throw fail(400,'Configuración de pantalla inválida.');
@@ -245,6 +245,22 @@ export function createApp(env = process.env, studioOptions = {}) {
    applied++;
   }
   res.json({ok:true,applied,skipped:devices.length-applied});
+ })));
+ // ---- Canales — fuente en vivo configurada UNA vez por ubicación (no en
+ // cada pantalla). La ficha de pantalla solo prende/apaga un switch por
+ // canal disponible en su ubicación; la URL vive acá, no en el device.
+ app.get('/api/channels',admin,(req,res)=>res.json(db.prepare('SELECT * FROM channels WHERE tenant=? ORDER BY name').all(req.user.tenant)));
+ app.post('/api/channels',admin,wrap(managed('channel.create',async(req,res)=>{
+  const {name,location,url}=req.body;
+  if(location&&!db.prepare('SELECT 1 FROM locations WHERE id=? AND tenant=?').get(location,req.user.tenant))throw fail(404,'Ubicación no encontrada.');
+  if(typeof url!=='string'||!/^https?:\/\/[^\s]{1,500}$/i.test(url))throw fail(400,'URL inválida. Usa http:// o https://.');
+  const id=randomUUID();
+  db.prepare('INSERT INTO channels (id,tenant,location,name,url) VALUES (?,?,?,?,?)').run(id,req.user.tenant,location||null,nameOf(name),url);
+  res.status(201).json({id});
+ })));
+ app.delete('/api/channels/:id',admin,wrap(managed('channel.delete',async(req,res)=>{
+  if(!db.prepare('DELETE FROM channels WHERE id=? AND tenant=?').run(req.params.id,req.user.tenant).changes)throw fail(404,'Canal no encontrado.');
+  res.json({ok:true});
  })));
  app.post('/api/pair/start',limit('pair-start',20),wrap(async(req,res)=>{
   db.prepare('DELETE FROM devices WHERE tenant IS NULL AND expires<?').run(Date.now());

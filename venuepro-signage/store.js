@@ -67,5 +67,13 @@ export function openStore(dir) {
     name TEXT NOT NULL, layout TEXT NOT NULL, promo TEXT, logo TEXT,
     text TEXT NOT NULL DEFAULT '', muted INTEGER NOT NULL DEFAULT 0
   )`);
+  // Canales: la fuente en vivo se configura UNA vez por ubicación acá (no
+  // en cada pantalla) — la ficha de pantalla solo prende/apaga un switch
+  // por canal disponible en su ubicación. Reemplaza el flujo viejo de
+  // escribir la URL a mano en cada pantalla con un prompt().
+  db.exec(`CREATE TABLE IF NOT EXISTS channels (
+    id TEXT PRIMARY KEY, tenant TEXT NOT NULL REFERENCES tenants(id),
+    location TEXT REFERENCES locations(id), name TEXT NOT NULL, url TEXT NOT NULL
+  )`);
   return db;
 }
