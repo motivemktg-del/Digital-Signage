@@ -174,6 +174,34 @@ public class MainActivity extends Activity {
  }
  // ExoPlayer sobre RTSP-TCP (más confiable detrás de NAT/firewall que UDP,
  // el costo de latencia es mínimo) — esto sí es tiempo casi real.
+ //
+ // El buffer POR DEFECTO de ExoPlayer (DefaultLoadControl) está pensado
+ // para streaming bajo demanda, no para en vivo — junta hasta varios
+ // segundos antes de empezar a reproducir, lo que se siente como
+ // latencia aunque el transporte (RTSP-TCP) ya sea casi instantáneo.
+ // Para la señal en vivo SIEMPRE se prioriza latencia mínima sobre
+ // resistencia a cortes de red (la señal ya viene por LAN, poca pérdida
+ // esperada) — un buffer pequeño + LiveConfiguration con target bajo le
+ // dice al reproductor "quédate pegado al borde en vivo, no acumules".
+ //
+ // OJO: si aun así se sigue viendo con 2-3s de atraso, revisa el "-g" del
+ // comando ffmpeg que arma la señal en go2rtc (el que captura la
+ // capturadora) — un GOP grande (ej. -g 50 a ~15-25fps = 2-3s entre
+ // keyframes) obliga a esperar el próximo keyframe para poder decodificar
+ // limpio, y NINGÚN ajuste de acá (el reproductor) puede evitar esa
+ // espera — eso se arregla bajando el "-g" en la config de ese stream en
+ // go2rtc (Home Assistant → add-on de go2rtc → su configuración), no en
+ // esta app.
+ private androidx.media3.exoplayer.ExoPlayer newLowLatencyPlayer(){
+  androidx.media3.exoplayer.DefaultLoadControl loadControl=new androidx.media3.exoplayer.DefaultLoadControl.Builder()
+   .setBufferDurationsMs(500,2000,250,250).build();
+  return new androidx.media3.exoplayer.ExoPlayer.Builder(this).setLoadControl(loadControl).build();
+ }
+ private androidx.media3.common.MediaItem lowLatencyRtspItem(String rtspUrl){
+  return new androidx.media3.common.MediaItem.Builder().setUri(rtspUrl)
+   .setLiveConfiguration(new androidx.media3.common.MediaItem.LiveConfiguration.Builder().setTargetOffsetMs(500).build())
+   .build();
+ }
  @androidx.media3.common.util.UnstableApi
  private void playLiveRtsp(String rtspUrl){
   if(destroyed||paused)return;
@@ -182,12 +210,12 @@ public class MainActivity extends Activity {
   livePlayingUrl=rtspUrl;playing=true;
   canvas=new FrameLayout(this);canvas.setClipChildren(true);root.addView(canvas);layoutDisplay();
   video=new TextureView(this);canvas.addView(video,new FrameLayout.LayoutParams(-1,-1,Gravity.CENTER));
-  final androidx.media3.exoplayer.ExoPlayer player=new androidx.media3.exoplayer.ExoPlayer.Builder(this).build();
+  final androidx.media3.exoplayer.ExoPlayer player=newLowLatencyPlayer();
   exoPlayer=player;
   player.setVideoTextureView(video);
   androidx.media3.exoplayer.source.MediaSource source=new androidx.media3.exoplayer.rtsp.RtspMediaSource.Factory()
    .setForceUseRtpTcp(true)
-   .createMediaSource(androidx.media3.common.MediaItem.fromUri(rtspUrl));
+   .createMediaSource(lowLatencyRtspItem(rtspUrl));
   player.setMediaSource(source);
   player.addListener(new androidx.media3.common.Player.Listener(){
    @Override public void onVideoSizeChanged(androidx.media3.common.VideoSize size){videoWidth=size.width;videoHeight=size.height;layoutDisplay();}
@@ -246,9 +274,9 @@ public class MainActivity extends Activity {
   long millis=Math.max(1,item.optInt("seconds",10))*1000L;
   String rtsp=item.optString("rtsp","");
   if(!rtsp.isEmpty()){
-   final androidx.media3.exoplayer.ExoPlayer player=new androidx.media3.exoplayer.ExoPlayer.Builder(this).build();
+   final androidx.media3.exoplayer.ExoPlayer player=newLowLatencyPlayer();
    exoPlayer=player;player.setVideoTextureView(video);
-   androidx.media3.exoplayer.source.MediaSource source=new androidx.media3.exoplayer.rtsp.RtspMediaSource.Factory().setForceUseRtpTcp(true).createMediaSource(androidx.media3.common.MediaItem.fromUri(rtsp));
+   androidx.media3.exoplayer.source.MediaSource source=new androidx.media3.exoplayer.rtsp.RtspMediaSource.Factory().setForceUseRtpTcp(true).createMediaSource(lowLatencyRtspItem(rtsp));
    player.setMediaSource(source);
    player.addListener(new androidx.media3.common.Player.Listener(){
     @Override public void onVideoSizeChanged(androidx.media3.common.VideoSize size){videoWidth=size.width;videoHeight=size.height;layoutDisplay();}
