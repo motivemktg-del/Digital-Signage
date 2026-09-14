@@ -21,6 +21,29 @@ export function deviceManifest(db, d, origin) {
  const mixOut=()=>{if(!d.mix)return null;const m=JSON.parse(d.mix);return {...m,promoUrl:assetUrl(m.promo),logoUrl:assetUrl(m.logo)};};
  const payload={paired:true,name:d.name,paused:!!d.paused,revision:d.revision||0,display:{orientation:d.orientation||'auto',rotation:d.rotation||0,fit:d.fit||'cover'},liveSource:d.live_source||null,mix:mixOut(),items:expand(d.playlist),schedules};return {...payload,version:hash(JSON.stringify(payload))};
 }
+// Trae una URL de video (MJPEG/MP4 — cualquier respuesta HTTP simple, sin
+// sub-recursos ni WebSocket) y la repite tal cual al navegador, como si
+// fuera propia. Esto es lo que de verdad resuelve poder ver la señal en
+// vivo desde el panel: el navegador nunca pide nada a la LAN del cliente
+// (evita contenido mixto Y la CSP default-src 'self', que igual bloquea
+// cualquier <iframe> externo) — quien pide esa URL es el VPS mismo, así
+// que basta con que el VPS pueda alcanzarla (misma LAN, o vía Tailscale).
+// No sirve para páginas tipo stream.html de go2rtc (esas cargan JS propio
+// y abren su propio WebSocket) — la URL debe ser el endpoint de video
+// puro, ej. http://<host>:1984/api/stream.mjpeg?src=NOMBRE.
+async function proxyLiveFeed(url, req, res) {
+ const controller = new AbortController();
+ req.on('close', () => controller.abort());
+ let upstream;
+ try { upstream = await fetch(url, { signal: controller.signal }); }
+ catch (e) { if (controller.signal.aborted) return; throw fail(502, 'No se pudo conectar con la fuente en vivo.'); }
+ if (!upstream.ok || !upstream.body) throw fail(502, 'La fuente en vivo respondió con un error.');
+ res.status(upstream.status);
+ const ct = upstream.headers.get('content-type'); if (ct) res.set('Content-Type', ct);
+ res.set('Cache-Control', 'no-store');
+ try { await pipeline(Readable.fromWeb(upstream.body), res); }
+ catch (e) { if (!controller.signal.aborted) throw e; }
+}
 export function createApp(env = process.env, studioOptions = {}) {
  const data = resolve(env.DATA_DIR || './data'), db = openStore(data), app = express();
  const origin = new URL(env.PUBLIC_URL || 'http://localhost:3080').origin;
@@ -122,6 +145,12 @@ export function createApp(env = process.env, studioOptions = {}) {
   if(!db.prepare('UPDATE devices SET live_source=?,mix=NULL,revision=revision+1 WHERE id=? AND tenant=?').run(url,req.params.id,req.user.tenant).changes)throw fail(404,'Pantalla no encontrada.');
   res.json({ok:true});
  })));
+ app.get('/api/devices/:id/live-feed',admin,wrap(async(req,res)=>{
+  const d=db.prepare('SELECT live_source FROM devices WHERE id=? AND tenant=?').get(req.params.id,req.user.tenant);
+  if(!d)throw fail(404,'Pantalla no encontrada.');
+  if(!d.live_source)throw fail(409,'Esta pantalla no tiene una señal en vivo configurada.');
+  await proxyLiveFeed(d.live_source,req,res);
+ }));
  // Mezcla sobre la señal en vivo — igual que live_source, es control-plane
  // puro: guardamos la intención (layout + qué promo + si va mudo) y quien
  // la compone de verdad es el reproductor real, leyendo esto del manifiesto.
@@ -222,6 +251,12 @@ export function createApp(env = process.env, studioOptions = {}) {
   for(const d of devices)db.prepare('UPDATE devices SET live_source=?,mix=NULL,revision=revision+1 WHERE id=?').run(cam.view_url,d.id);
   res.json({ok:true,applied:devices.length});
  })));
+ app.get('/api/ptz-cameras/:id/live-feed',admin,wrap(async(req,res)=>{
+  const cam=db.prepare('SELECT view_url FROM ptz_cameras WHERE id=? AND tenant=?').get(req.params.id,req.user.tenant);
+  if(!cam)throw fail(404,'Cámara no encontrada.');
+  if(!cam.view_url)throw fail(409,'Esta cámara no tiene una URL de video configurada.');
+  await proxyLiveFeed(cam.view_url,req,res);
+ }));
  app.post('/api/ptz-cameras/:id/presets',admin,wrap(managed('ptz.savePreset',async(req,res)=>{
   const cam=db.prepare('SELECT * FROM ptz_cameras WHERE id=? AND tenant=?').get(req.params.id,req.user.tenant);if(!cam)throw fail(404,'Cámara no encontrada.');
   const {label,pan,tilt,zoom}=req.body;

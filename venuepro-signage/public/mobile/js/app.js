@@ -119,7 +119,7 @@ const actions = {
     const name = prompt('Nombre de la cámara (ej. PTZ Escenario):'); if (!name) return;
     const onvifUrl = prompt('URL ONVIF (xAddr) — ej. http://192.168.1.41/onvif/device_service. Déjalo vacío si no la tienes aún:') || null;
     const rtspUrl = prompt('URL RTSP del video (opcional, para el agente local):') || null;
-    const viewUrl = prompt('URL de video visible en navegador (ej. http://192.168.1.10:1984/stream.html?src=ptz1 de go2rtc) — es lo que se manda a las pantallas con "Enviar a las pantallas". Déjalo vacío si no la tienes aún:') || null;
+    const viewUrl = prompt('URL de VIDEO puro (no la página del visor) — ej. http://192.168.1.10:1984/api/stream.mjpeg?src=ptz1 de go2rtc. El panel la trae a través del servidor, así que evita páginas como stream.html (esas abren su propio WebSocket). Déjalo vacío si no la tienes aún:') || null;
     await run(createPtzCamera({ name, location: locationId, onvifUrl, rtspUrl, viewUrl }), 'Cámara agregada');
   },
   async deletePtzCameraNow(id) {
@@ -285,7 +285,7 @@ const actions = {
   async setLiveSourceNow(id) {
     const d = remote.devices.find(d => d.id === id);
     const current = d.liveSource || '';
-    const url = prompt('URL del stream en la LAN del local (ej. http://192.168.1.10:1984/stream.html?src=mivideo&mode=webrtc). Déjalo vacío para quitarla:', current);
+    const url = prompt('URL de VIDEO puro de go2rtc (no la página del visor) — ej. http://192.168.1.10:1984/api/stream.mjpeg?src=mivideo. El panel la trae a través del servidor (evita mixed content y CSP), así que no uses stream.html. Déjalo vacío para quitarla:', current);
     if (url === null) return; // canceló
     await run(setLiveSource(id, url.trim() || null), url.trim() ? 'Fuente en vivo asignada' : 'Fuente en vivo quitada');
   },
@@ -658,7 +658,7 @@ function viewPtz() {
       <div style="font:400 10px var(--mono);color:var(--ink-faint);margin-bottom:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${cam.onvif_url ? 'ONVIF · ' + esc(cam.onvif_url) : 'Sin URL ONVIF configurada todavía'}</div>
 
       <div style="position:relative;aspect-ratio:16/9;border-radius:14px;overflow:hidden;background:repeating-linear-gradient(135deg,#242830 0 7px,#1c1f25 7px 14px);margin-bottom:7px">
-        ${cam.view_url ? `<iframe src="${esc(cam.view_url)}" allow="autoplay" style="position:absolute;inset:0;width:100%;height:100%;border:0" title="video PTZ"></iframe><div class="badge-live" style="position:absolute;top:10px;left:10px"><div class="dot dot-sm" style="background:var(--red)"></div><span>EN DIRECTO</span></div>` : `<div style="position:absolute;inset:0;display:flex;align-items:center;justify-content:center;font:500 10px var(--mono);color:var(--ink-faint);text-align:center;padding:0 16px">sin URL de video configurada</div>`}
+        ${cam.view_url ? `<img src="/api/ptz-cameras/${esc(cam.id)}/live-feed" style="position:absolute;inset:0;width:100%;height:100%;object-fit:cover" alt="video PTZ"><div class="badge-live" style="position:absolute;top:10px;left:10px"><div class="dot dot-sm" style="background:var(--red)"></div><span>EN DIRECTO</span></div>` : `<div style="position:absolute;inset:0;display:flex;align-items:center;justify-content:center;font:500 10px var(--mono);color:var(--ink-faint);text-align:center;padding:0 16px">sin URL de video configurada</div>`}
         <div style="position:absolute;top:50%;left:50%;width:${frameW};height:${frameW};border:1.5px solid rgba(47,123,246,.85);border-radius:6px;box-shadow:0 0 0 9999px rgba(14,15,18,.45);transform:translate(-50%,-50%) translate(${s.x}px,${s.y}px);transition:all .22s cubic-bezier(.22,.9,.3,1)"></div>
         <div style="position:absolute;bottom:11px;right:11px;padding:4px 9px;border-radius:6px;background:rgba(14,15,18,.84);font:600 9.5px var(--mono);color:#c4c9cf">${s.zoom.toFixed(1)}×</div>
       </div>
@@ -747,13 +747,15 @@ function bigPreview(d) {
   // que se configuraron explícitamente en vertical usan 9:16.
   const ratio = d.orientation === 'portrait' ? '9/16' : '16/9';
   const box = `width:100%;aspect-ratio:${ratio};max-height:340px;border-radius:14px;overflow:hidden;background:repeating-linear-gradient(135deg,#242830 0 7px,#1c1f25 7px 14px);display:flex;align-items:center;justify-content:center;margin-bottom:14px;position:relative`;
-  // Fuente en vivo real (backend): si el dispositivo tiene live_source
-  // asignado, esta ventana muestra ESE stream — el navegador de quien mira
-  // el panel tiene que poder llegar a esa URL (misma LAN, o vía un túnel
-  // tipo Tailscale si es remoto). No pasa por el VPS para nada del video.
+  // Fuente en vivo real: el navegador NUNCA pide la URL de la LAN
+  // directamente (chocaría con contenido mixto y con la CSP del propio
+  // backend) — pide /api/devices/:id/live-feed, que es el VPS quien la
+  // trae y la repite tal cual. live_source debe ser un endpoint de video
+  // puro (ej. .../api/stream.mjpeg?src=NOMBRE de go2rtc), no una página
+  // como stream.html (esa abre su propio WebSocket, que esto no proxea).
   if (d.liveSource) {
     return `<div style="${box}">
-      <iframe src="${esc(d.liveSource)}" allow="autoplay" style="position:absolute;inset:0;width:100%;height:100%;border:0" title="stream en vivo"></iframe>
+      <img src="/api/devices/${esc(d.id)}/live-feed" style="position:absolute;inset:0;width:100%;height:100%;object-fit:cover" alt="señal en vivo">
       ${d.mix ? mixOverlayHtml(d.mix) : ''}
       <div class="badge-live" style="position:absolute;top:10px;left:10px"><div class="dot dot-sm" style="background:var(--red)"></div><span>EN DIRECTO</span></div>
     </div>`;
@@ -919,6 +921,10 @@ function deviceSheet() {
         <div style="flex:1;min-width:0"><div style="font:600 13px var(--sans);margin-bottom:2px">Señal en vivo (LAN)</div><div style="font:400 10.5px var(--mono);color:var(--ink-dimmer);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${d.liveSource ? esc(d.liveSource) : 'toca para configurar'}</div></div>
         ${d.liveSource ? `<div class="tag" style="background:rgba(242,99,90,.14);color:var(--red)">EN DIRECTO</div>` : ''}
       </div>
+      <div class="row card-flat row-tap" style="padding:13px 14px;opacity:.5" ${A('onvifSoon')}>
+        <div style="width:17px;height:17px;border-radius:50%;flex:none;border:1.5px solid rgba(255,255,255,.22)"></div>
+        <div style="flex:1;min-width:0"><div style="font:600 13px var(--sans);margin-bottom:2px">Canal ONVIF</div><div style="font:400 10.5px var(--mono);color:var(--ink-dimmer)">próximamente</div></div>
+      </div>
     </div>
     ${d.liveSource ? `<div class="row-tap" style="text-align:center;padding:10px 0;border-radius:12px;background:${d.mix ? 'rgba(47,123,246,.12)' : 'var(--card-2)'};border:1px solid ${d.mix ? 'var(--accent)' : 'var(--line)'};font:600 12px var(--sans);margin-bottom:10px" ${A('openMix', d.id)}>🎛️ ${d.mix ? 'Editar mezcla' : 'Mezclar sobre la señal'}</div>` : ''}
     ${remote.ptzCameras.some(c => c.location === d.location) ? `<div class="row-tap" style="text-align:center;padding:10px 0;border-radius:12px;background:var(--card-2);border:1px solid var(--line);font:600 12px var(--sans);margin-bottom:16px" ${A('openPtzFromDevice', d.id)}>📹 Control PTZ</div>` : ''}
@@ -1047,7 +1053,7 @@ function assetPreviewOverlay() {
     : `<video src="${assetMediaUrl(a.id)}" controls autoplay playsinline style="max-width:100%;max-height:100%;object-fit:contain;border-radius:10px;display:block"></video>`;
   return `<div class="backdrop" style="background:rgba(6,7,9,.92);z-index:40" ${A('closeAssetPreview')}></div>
   <div style="position:fixed;inset:0;z-index:41;display:flex;align-items:center;justify-content:center;padding:28px;pointer-events:none">
-    <div style="pointer-events:auto;max-width:100%;max-height:100%;position:relative">
+    <div style="pointer-events:auto;max-width:100%;max-height:100%;position:relative;animation:sheetUp .22s cubic-bezier(.22,.9,.3,1)">
       ${media}
       <div class="row-tap" title="Cerrar" style="position:absolute;top:-16px;right:-16px;width:32px;height:32px;border-radius:50%;background:var(--card);border:1px solid var(--line);display:flex;align-items:center;justify-content:center;font:600 14px var(--sans)" ${A('closeAssetPreview')}>✕</div>
     </div>
@@ -1084,8 +1090,6 @@ function viewContent() {
         </label>
         <div class="row-tap" style="flex:1;text-align:center;padding:12px 0;border-radius:14px;background:var(--card-2);border:1px solid var(--line);font:600 12.5px var(--sans)" ${A('newAssetFolder')}>📁+ Nueva carpeta</div>
       </div>
-      <div class="row-tap" style="text-align:center;padding:12px 0;border-radius:14px;background:var(--card-2);border:1px solid var(--line);opacity:.5;font:600 12.5px var(--sans);margin-bottom:6px" ${A('onvifSoon')}>+ Canal ONVIF</div>
-      <div style="font:400 10.5px var(--mono);color:var(--ink-faint);margin-bottom:14px">Canal ONVIF: próximamente — necesita cambios en el backend real y en el reproductor.</div>
 
       ${(remote.assetFolders || []).length > 0 ? `<div class="stack" style="margin-bottom:16px">
         ${remote.assetFolders.map(f => {
