@@ -34,12 +34,18 @@ export function deviceManifest(db, d, origin) {
 async function proxyLiveFeed(url, req, res) {
  const controller = new AbortController();
  req.on('close', () => controller.abort());
+ // Los navegadores de celular (sobre todo iOS) piden video por RANGOS de
+ // bytes y no reproducen si no se los respetas (aunque el de escritorio
+ // sí lo tolere sin eso) — hay que reenviar el Range del cliente al
+ // upstream, y devolver 206 + Content-Range tal cual venga, igual que ya
+ // hace streamAsset() para los archivos subidos.
+ const headers = {}; if (req.headers.range) headers.Range = req.headers.range;
  let upstream;
- try { upstream = await fetch(url, { signal: controller.signal }); }
+ try { upstream = await fetch(url, { signal: controller.signal, headers }); }
  catch (e) { if (controller.signal.aborted) return; throw fail(502, 'No se pudo conectar con la fuente en vivo.'); }
  if (!upstream.ok || !upstream.body) throw fail(502, 'La fuente en vivo respondió con un error.');
  res.status(upstream.status);
- const ct = upstream.headers.get('content-type'); if (ct) res.set('Content-Type', ct);
+ for (const key of ['content-type', 'content-length', 'content-range', 'accept-ranges']) if (upstream.headers.has(key)) res.set(key, upstream.headers.get(key));
  res.set('Cache-Control', 'no-store');
  try { await pipeline(Readable.fromWeb(upstream.body), res); }
  catch (e) { if (!controller.signal.aborted) throw e; }
