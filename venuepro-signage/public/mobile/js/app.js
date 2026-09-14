@@ -1117,7 +1117,7 @@ function deviceSheet() {
   const status = deviceStatus(d);
   const playlist = remote.playlists.find(p => p.id === d.playlist);
   return `<div class="backdrop" ${A('closeDevice')}></div>
-  <div class="sheet${sheetEntering ? ' entering' : ''}" style="height:calc(100vh - 10px);max-height:calc(100vh - 10px)">
+  <div class="sheet${sheetEntering ? ' entering' : ''}" style="height:calc(100vh - env(safe-area-inset-top) - 10px);max-height:calc(100vh - env(safe-area-inset-top) - 10px)">
     <div class="sheet-grip"></div>
     <div class="row" style="gap:8px;margin-bottom:3px">
       <div class="dot" style="background:${STATUS_COLOR[status]}"></div>
