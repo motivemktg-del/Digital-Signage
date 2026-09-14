@@ -69,6 +69,18 @@ public class MainActivity extends Activity {
  private static org.webrtc.EglBase webrtcEglBase;
  private org.webrtc.PeerConnection webrtcPc;
  private org.webrtc.SurfaceViewRenderer webrtcRenderer;
+ // Overlay del mix (logo/promo/texto) — antes SOLO existía como preview
+ // CSS en el panel web (mixOverlayHtml() en app.js), nunca se dibujaba en
+ // la pantalla real. Es HERMANO de "canvas" dentro de "root" (no hijo),
+ // ver syncMixOverlay()/buildMixOverlay() más abajo — así queda siempre
+ // arriba de lo que haya adentro de canvas (video/foto/WebRTC) sin pelear
+ // por el orden en que cada método de reproducción agrega sus vistas.
+ private FrameLayout mixOverlay;
+ // Las imágenes del mix (promo/logo) son assets ya subidos — se piden por
+ // HTTP autenticado (como el manifiesto) y se cachean en memoria por URL,
+ // porque layoutDisplay() se puede llamar seguido y no tiene sentido
+ // re-descargar la misma imagen cada vez.
+ private final Map<String,Bitmap> mixImageCache=new ConcurrentHashMap<>();
  @Override public void onCreate(Bundle b){super.onCreate(b);
   getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
   getWindow().getDecorView().setSystemUiVisibility(View.SYSTEM_UI_FLAG_FULLSCREEN|View.SYSTEM_UI_FLAG_HIDE_NAVIGATION|View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY);
@@ -112,11 +124,19 @@ public class MainActivity extends Activity {
     // Keep the previous manifest active until every asset verifies successfully.
     AtomicFile file=new AtomicFile(new File(getFilesDir(),"manifest.json"));FileOutputStream out=null;
     try{out=file.startWrite();out.write(next.toString().getBytes(StandardCharsets.UTF_8));file.finishWrite(out);}catch(Exception e){if(out!=null)file.failWrite(out);throw e;}
+    // Si YA estaba en vivo y este manifiesto apaga esa fuente, hay que
+    // forzar el paso a la lista aunque "playing" siga en true — nada
+    // pone playing=false al salir de en vivo (ahí no hay "onCompletion"
+    // como en un video), así que sin este chequeo la condición de abajo
+    // (!playing&&!paused) nunca se cumplía y la pantalla se quedaba
+    // congelada en la última señal en vivo para siempre, sin volver
+    // nunca a la lista de fotos/videos. Bug real, no solo caso raro.
+    boolean saliendoDeEnVivo=!liveSource.isEmpty()&&next.optString("liveSource","").isEmpty();
     current=next;version=next.getString("version");lastError="";liveSource=next.optString("liveSource","");liveSourceRtsp=next.optString("liveSourceRtsp","");liveSourceWebrtc=next.optString("liveSourceWebrtc","");
     ui.post(()->{sequence="";layoutDisplay();
      if(!liveSource.isEmpty())playLive(liveSource);
      else if(next.optBoolean("paused"))stopPlayback();
-     else if(!playing&&!paused)playNext();});
+     else if(saliendoDeEnVivo||(!playing&&!paused))playNext();});
    }
    request("/api/player/heartbeat",new JSONObject().put("version",version).put("error",lastError));
   }catch(Unpaired e){
@@ -152,7 +172,7 @@ public class MainActivity extends Activity {
   }
   return manifest.getJSONArray("items");
  }
- private void stopPlayback(){ui.removeCallbacks(advance);if(mediaPlayer!=null){mediaPlayer.release();mediaPlayer=null;}if(exoPlayer!=null){exoPlayer.release();exoPlayer=null;}if(webrtcPc!=null){webrtcPc.close();webrtcPc=null;}if(webrtcRenderer!=null){webrtcRenderer.release();webrtcRenderer=null;}video=null;canvas=null;videoWidth=0;videoHeight=0;if(photo!=null){photo.setImageDrawable(null);photo=null;}livePlayingUrl="";playing=false;root.removeAllViews();}
+ private void stopPlayback(){ui.removeCallbacks(advance);if(mediaPlayer!=null){mediaPlayer.release();mediaPlayer=null;}if(exoPlayer!=null){exoPlayer.release();exoPlayer=null;}if(webrtcPc!=null){webrtcPc.close();webrtcPc=null;}if(webrtcRenderer!=null){webrtcRenderer.release();webrtcRenderer=null;}video=null;canvas=null;videoWidth=0;videoHeight=0;if(photo!=null){photo.setImageDrawable(null);photo=null;}mixOverlay=null;livePlayingUrl="";playing=false;root.removeAllViews();}
  // Si el manifiesto trae liveSourceWebrtc, se intenta ESA primero — WebRTC
  // puede pedirle un keyframe al encoder al conectarse, cosa que RTSP no
  // puede hacer (solo espera al próximo programado). Si no logra conectar
@@ -429,6 +449,95 @@ public class MainActivity extends Activity {
   // SurfaceViewRenderer (WebRTC) resuelve su propio recorte/ajuste — no
   // hace falta calcularle el tamaño a mano como al TextureView de arriba.
   if(webrtcRenderer!=null)webrtcRenderer.setScalingType(cover?org.webrtc.RendererCommon.ScalingType.SCALE_ASPECT_FILL:org.webrtc.RendererCommon.ScalingType.SCALE_ASPECT_FIT);
+  syncMixOverlay();
+  if(mixOverlay!=null){mixOverlay.setLayoutParams(new FrameLayout.LayoutParams(w,h,Gravity.CENTER));mixOverlay.setRotation(angle);}
+ }
+ // Agrega/reconstruye/quita el overlay del mix según el manifiesto actual.
+ // Se llama desde layoutDisplay(), que ya corre en cada creación de canvas
+ // y en cada actualización de manifiesto (la versión cambia si el mix
+ // cambió), así queda sincronizado solo. Se reconstruye completo cada vez
+ // (igual que el resto de la app, que re-renderiza todo ante cualquier
+ // cambio) en vez de tratar de diffear — es sencillo y aquí no se llama
+ // seguido como para que el costo importe.
+ private void syncMixOverlay(){
+  if(mixOverlay!=null){root.removeView(mixOverlay);mixOverlay=null;}
+  JSONObject mix=current==null?null:current.optJSONObject("mix");
+  if(mix==null||canvas==null)return;
+  mixOverlay=buildMixOverlay(mix);
+  root.addView(mixOverlay,new FrameLayout.LayoutParams(-1,-1,Gravity.CENTER));
+ }
+ // Espejo de mixOverlayHtml() en app.js (panel web) — mismos 3 layouts,
+ // mismos campos (layout/promoUrl/logoUrl/text/muted, ya resueltos por
+ // mixOut() en server.js), para que se vea igual en la pantalla real que
+ // en la vista previa del panel.
+ private FrameLayout buildMixOverlay(JSONObject mix){
+  String layout=mix.optString("layout","lower");
+  String promoUrl=mix.optString("promoUrl","");
+  String logoUrl=mix.optString("logoUrl","");
+  String text=mix.optString("text","");
+  boolean muted=mix.optBoolean("muted",false);
+  FrameLayout overlay=new FrameLayout(this);
+  if("full".equals(layout))buildMixFull(overlay,promoUrl,logoUrl,text);
+  else if("split".equals(layout))buildMixSplit(overlay,promoUrl,logoUrl,text);
+  else buildMixLower(overlay,logoUrl,text);
+  if(muted){
+   TextView badge=new TextView(this);badge.setText("🔇 MUDO");badge.setTextColor(Color.rgb(196,201,207));badge.setTextSize(9);badge.setTypeface(null,android.graphics.Typeface.BOLD);
+   badge.setBackgroundColor(Color.argb(204,14,15,18));badge.setPadding(7,3,7,3);
+   FrameLayout.LayoutParams lp=new FrameLayout.LayoutParams(FrameLayout.LayoutParams.WRAP_CONTENT,FrameLayout.LayoutParams.WRAP_CONTENT,Gravity.TOP|Gravity.END);lp.setMargins(0,8,8,0);
+   overlay.addView(badge,lp);
+  }
+  return overlay;
+ }
+ private void buildMixFull(FrameLayout overlay,String promoUrl,String logoUrl,String text){
+  overlay.setBackgroundColor(Color.rgb(17,17,17));
+  if(!promoUrl.isEmpty()){ImageView bg=mixImage(promoUrl,ImageView.ScaleType.CENTER_CROP);bg.setAlpha(0.55f);overlay.addView(bg,new FrameLayout.LayoutParams(-1,-1));}
+  LinearLayout column=new LinearLayout(this);column.setOrientation(LinearLayout.VERTICAL);column.setGravity(Gravity.CENTER_HORIZONTAL);
+  if(!logoUrl.isEmpty()){ImageView logo=mixImage(logoUrl,ImageView.ScaleType.FIT_CENTER);LinearLayout.LayoutParams lp=new LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT,44);lp.bottomMargin=8;column.addView(logo,lp);}
+  if(!text.isEmpty()){TextView t=new TextView(this);t.setText(text);t.setTextColor(Color.WHITE);t.setTextSize(16);t.setTypeface(null,android.graphics.Typeface.BOLD);t.setGravity(Gravity.CENTER);t.setShadowLayer(4,0,1,Color.argb(180,0,0,0));column.addView(t);}
+  FrameLayout.LayoutParams clp=new FrameLayout.LayoutParams(FrameLayout.LayoutParams.WRAP_CONTENT,FrameLayout.LayoutParams.WRAP_CONTENT,Gravity.CENTER);clp.leftMargin=clp.rightMargin=16;
+  overlay.addView(column,clp);
+ }
+ private void buildMixSplit(FrameLayout overlay,String promoUrl,String logoUrl,String text){
+  LinearLayout row=new LinearLayout(this);row.setOrientation(LinearLayout.HORIZONTAL);
+  overlay.addView(row,new FrameLayout.LayoutParams(-1,-1));
+  row.addView(new View(this),new LinearLayout.LayoutParams(0,-1,62f)); // 62% izquierda, transparente: se ve la señal de abajo
+  FrameLayout panel=new FrameLayout(this);panel.setBackgroundColor(Color.rgb(17,17,17));
+  row.addView(panel,new LinearLayout.LayoutParams(0,-1,38f)); // 38% derecha, el panel del mix
+  if(!promoUrl.isEmpty()){ImageView bg=mixImage(promoUrl,ImageView.ScaleType.CENTER_CROP);bg.setAlpha(0.5f);panel.addView(bg,new FrameLayout.LayoutParams(-1,-1));}
+  LinearLayout column=new LinearLayout(this);column.setOrientation(LinearLayout.VERTICAL);column.setGravity(Gravity.CENTER_HORIZONTAL);
+  if(!logoUrl.isEmpty()){ImageView logo=mixImage(logoUrl,ImageView.ScaleType.FIT_CENTER);LinearLayout.LayoutParams lp=new LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT,30);lp.bottomMargin=6;column.addView(logo,lp);}
+  if(!text.isEmpty()){TextView t=new TextView(this);t.setText(text);t.setTextColor(Color.WHITE);t.setTextSize(11);t.setTypeface(null,android.graphics.Typeface.BOLD);t.setGravity(Gravity.CENTER);t.setShadowLayer(3,0,1,Color.argb(180,0,0,0));column.addView(t);}
+  FrameLayout.LayoutParams clp=new FrameLayout.LayoutParams(FrameLayout.LayoutParams.WRAP_CONTENT,FrameLayout.LayoutParams.WRAP_CONTENT,Gravity.CENTER);clp.leftMargin=clp.rightMargin=8;
+  panel.addView(column,clp);
+ }
+ private void buildMixLower(FrameLayout overlay,String logoUrl,String text){
+  LinearLayout bar=new LinearLayout(this);bar.setOrientation(LinearLayout.HORIZONTAL);bar.setGravity(Gravity.CENTER_VERTICAL);
+  android.graphics.drawable.GradientDrawable gradient=new android.graphics.drawable.GradientDrawable(android.graphics.drawable.GradientDrawable.Orientation.BOTTOM_TOP,new int[]{Color.argb(209,0,0,0),Color.argb(0,0,0,0)});
+  bar.setBackground(gradient);bar.setPadding(12,10,12,8);
+  if(!logoUrl.isEmpty()){ImageView logo=mixImage(logoUrl,ImageView.ScaleType.CENTER_CROP);LinearLayout.LayoutParams lp=new LinearLayout.LayoutParams(22,22);lp.rightMargin=8;bar.addView(logo,lp);}
+  if(!text.isEmpty()){TextView t=new TextView(this);t.setText(text);t.setTextColor(Color.WHITE);t.setTextSize(12);t.setTypeface(null,android.graphics.Typeface.BOLD);t.setSingleLine(true);t.setEllipsize(android.text.TextUtils.TruncateAt.END);bar.addView(t,new LinearLayout.LayoutParams(0,LinearLayout.LayoutParams.WRAP_CONTENT,1f));}
+  FrameLayout.LayoutParams blp=new FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT,FrameLayout.LayoutParams.WRAP_CONTENT,Gravity.BOTTOM);
+  overlay.addView(bar,blp);
+ }
+ private ImageView mixImage(String url,ImageView.ScaleType scaleType){
+  ImageView v=new ImageView(this);v.setScaleType(scaleType);
+  loadMixImage(url,bmp->{if(bmp!=null&&v.isAttachedToWindow())v.setImageBitmap(bmp);});
+  return v;
+ }
+ private void loadMixImage(String url,java.util.function.Consumer<Bitmap> callback){
+  if(url==null||url.isEmpty())return;
+  Bitmap cached=mixImageCache.get(url);
+  if(cached!=null){callback.accept(cached);return;}
+  network.execute(()->{
+   try{
+    HttpURLConnection c=connection(url,"GET");
+    try{
+     if(c.getResponseCode()!=200)throw new IOException("No se pudo cargar imagen del mix");
+     Bitmap bitmap;try(InputStream in=c.getInputStream()){bitmap=BitmapFactory.decodeStream(in);}
+     if(bitmap!=null){mixImageCache.put(url,bitmap);ui.post(()->callback.accept(bitmap));}
+    }finally{c.disconnect();}
+   }catch(Exception ignored){}
+  });
  }
  private void message(String text){root.removeAllViews();TextView t=new TextView(this);t.setText(text);t.setTextColor(Color.rgb(177,237,137));t.setTextSize(24);t.setGravity(Gravity.CENTER);t.setPadding(24,24,24,24);root.addView(t,new FrameLayout.LayoutParams(-1,-1));}
  private void showPair(Bitmap qr,String code){if(current!=null)return;root.removeAllViews();LinearLayout box=new LinearLayout(this);box.setOrientation(LinearLayout.VERTICAL);box.setGravity(Gravity.CENTER);root.addView(box,new FrameLayout.LayoutParams(-1,-1));TextView title=new TextView(this);title.setText("VenuePro Signage\nEscanea desde el administrador");title.setTextSize(22);title.setGravity(Gravity.CENTER);title.setTextColor(Color.WHITE);box.addView(title);ImageView image=new ImageView(this);image.setImageBitmap(qr);int size=Math.min(getResources().getDisplayMetrics().widthPixels,getResources().getDisplayMetrics().heightPixels)/2;LinearLayout.LayoutParams lp=new LinearLayout.LayoutParams(size,size);lp.setMargins(0,18,0,18);box.addView(image,lp);TextView label=new TextView(this);label.setText(code+"\nCódigo válido por 10 minutos");label.setTextSize(20);label.setGravity(Gravity.CENTER);label.setTextColor(Color.rgb(177,237,137));box.addView(label);Button setup=new Button(this);setup.setText("Configurar inicio automático");setup.setOnClickListener(v->startupSettings());box.addView(setup);}
