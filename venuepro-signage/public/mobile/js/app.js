@@ -8,6 +8,7 @@ const ui = {
   loginError: '',
   toast: null,
   detailDeviceId: null,
+  deviceMoreOpen: false, // "Ubicación" + "Pantalla" en la ficha van juntas en un solo colapsable, arranca cerrado
   currentLocationId: null, // ubicación abierta en viewLocationDetail
   currentFolderId: null,   // carpeta de biblioteca abierta en viewAssetFolder
   previewAssetId: null,    // asset mostrado a pantalla completa (lightbox)
@@ -78,8 +79,9 @@ const actions = {
     applyTheme(ui.theme); render();
   },
 
-  openDevice(id) { ui.detailDeviceId = id; render(); },
+  openDevice(id) { ui.detailDeviceId = id; ui.deviceMoreOpen = false; render(); },
   closeDevice() { ui.detailDeviceId = null; render(); },
+  toggleDeviceMore() { ui.deviceMoreOpen = !ui.deviceMoreOpen; render(); },
   async togglePause(id) {
     const d = remote.devices.find(d => d.id === id); if (!d) return;
     await run(setDevicePlayback(id, !d.paused));
@@ -989,27 +991,38 @@ function deviceSheet() {
       <div class="btn btn-primary row-tap" style="padding:11px 16px;font-size:13px" ${A('assignPlaylistTo', d.id)}>Asignar</div>
     </div>
 
-    <div class="eyebrow">Ubicación</div>
-    <select data-change="moveDevice" data-arg="${esc(d.id)}" style="width:100%;padding:11px;border-radius:10px;background:var(--card-2);border:1px solid var(--line);color:var(--ink);margin-bottom:16px">
-      <option value="">Sin ubicación</option>
-      ${remote.locations.map(l => `<option value="${esc(l.id)}" ${l.id === d.location ? 'selected' : ''}>${esc(l.name)}</option>`).join('')}
-    </select>
+    ${(() => {
+      const loc = remote.locations.find(l => l.id === d.location);
+      // Ubicación y Pantalla no cambian casi nunca comparado con Fuente/
+      // lista — van juntas en un solo colapsable cerrado por defecto para
+      // no ocupar espacio de la tarjeta con ajustes que rara vez se tocan.
+      return `<div class="row-tap" style="justify-content:space-between;padding:10px 2px;margin-bottom:${ui.deviceMoreOpen ? '8px' : '16px'}" ${A('toggleDeviceMore')}>
+        <div class="eyebrow" style="margin:0">Más ajustes${!ui.deviceMoreOpen ? ` · ${loc ? esc(loc.name) : 'sin ubicación'}` : ''}</div>
+        <div style="color:var(--ink-faint);font:400 12px var(--sans)">${ui.deviceMoreOpen ? '▲' : '▼'}</div>
+      </div>
+      ${ui.deviceMoreOpen ? `
+      <div class="eyebrow">Ubicación</div>
+      <select data-change="moveDevice" data-arg="${esc(d.id)}" style="width:100%;padding:11px;border-radius:10px;background:var(--card-2);border:1px solid var(--line);color:var(--ink);margin-bottom:16px">
+        <option value="">Sin ubicación</option>
+        ${remote.locations.map(l => `<option value="${esc(l.id)}" ${l.id === d.location ? 'selected' : ''}>${esc(l.name)}</option>`).join('')}
+      </select>
 
-    <div class="eyebrow">Pantalla</div>
-    <div data-display-form style="margin-bottom:16px" class="stack">
-      <select name="orientation" data-change="setDisplayOpt" data-arg="${esc(d.id)}" style="padding:11px;border-radius:10px;background:var(--card-2);border:1px solid var(--line);color:var(--ink)">
-        <option value="auto" ${d.orientation === 'auto' ? 'selected' : ''}>Automática</option>
-        <option value="landscape" ${d.orientation === 'landscape' ? 'selected' : ''}>Horizontal</option>
-        <option value="portrait" ${d.orientation === 'portrait' ? 'selected' : ''}>Vertical</option>
-      </select>
-      <select name="fit" data-change="setDisplayOpt" data-arg="${esc(d.id)}" style="padding:11px;border-radius:10px;background:var(--card-2);border:1px solid var(--line);color:var(--ink)">
-        <option value="cover" ${d.fit === 'cover' ? 'selected' : ''}>Rellenar (recorta)</option>
-        <option value="contain" ${d.fit === 'contain' ? 'selected' : ''}>Mostrar completo</option>
-      </select>
-      <select name="rotation" data-change="setDisplayOpt" data-arg="${esc(d.id)}" style="padding:11px;border-radius:10px;background:var(--card-2);border:1px solid var(--line);color:var(--ink)">
-        ${[0, 90, 180, 270].map(r => `<option value="${r}" ${d.rotation === r ? 'selected' : ''}>Giro ${r}°</option>`).join('')}
-      </select>
-    </div>
+      <div class="eyebrow">Pantalla</div>
+      <div data-display-form style="margin-bottom:16px" class="stack">
+        <select name="orientation" data-change="setDisplayOpt" data-arg="${esc(d.id)}" style="padding:11px;border-radius:10px;background:var(--card-2);border:1px solid var(--line);color:var(--ink)">
+          <option value="auto" ${d.orientation === 'auto' ? 'selected' : ''}>Automática</option>
+          <option value="landscape" ${d.orientation === 'landscape' ? 'selected' : ''}>Horizontal</option>
+          <option value="portrait" ${d.orientation === 'portrait' ? 'selected' : ''}>Vertical</option>
+        </select>
+        <select name="fit" data-change="setDisplayOpt" data-arg="${esc(d.id)}" style="padding:11px;border-radius:10px;background:var(--card-2);border:1px solid var(--line);color:var(--ink)">
+          <option value="cover" ${d.fit === 'cover' ? 'selected' : ''}>Rellenar (recorta)</option>
+          <option value="contain" ${d.fit === 'contain' ? 'selected' : ''}>Mostrar completo</option>
+        </select>
+        <select name="rotation" data-change="setDisplayOpt" data-arg="${esc(d.id)}" style="padding:11px;border-radius:10px;background:var(--card-2);border:1px solid var(--line);color:var(--ink)">
+          ${[0, 90, 180, 270].map(r => `<option value="${r}" ${d.rotation === r ? 'selected' : ''}>Giro ${r}°</option>`).join('')}
+        </select>
+      </div>` : ''}`;
+    })()}
 
     <div class="row" style="gap:8px">
       <div class="btn btn-ghost row-tap" style="flex:1;padding:11px 0;font-size:12.5px" ${A('togglePause', d.id)}>${d.paused ? 'Reanudar' : 'Pausar'}</div>
