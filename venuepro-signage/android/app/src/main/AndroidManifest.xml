@@ -5,7 +5,7 @@
  <uses-feature android:name="android.hardware.touchscreen" android:required="false"/>
  <uses-feature android:name="android.software.leanback" android:required="false"/>
  <!-- usesCleartextTraffic=true: la fuente en vivo local (ej. go2rtc en la
-      LAN del local, http://192.168.x.x:1984/...) no tiene HTTPS -- es una
+      LAN del local, http://192.168.x.x:1984/...) no tiene HTTPS, es una
       IP privada, nunca sale a internet. Las llamadas a la API real
       (SERVER en MainActivity.java) siguen forzadas a HTTPS ahí mismo,
       esto solo afecta al WebView de la fuente en vivo. -->

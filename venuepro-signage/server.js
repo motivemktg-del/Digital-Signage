@@ -261,6 +261,12 @@ export function createApp(env = process.env, studioOptions = {}) {
   const {name,location,url}=req.body;
   if(location&&!db.prepare('SELECT 1 FROM locations WHERE id=? AND tenant=?').get(location,req.user.tenant))throw fail(404,'Ubicación no encontrada.');
   if(typeof url!=='string'||!/^https?:\/\/[^\s]{1,500}$/i.test(url))throw fail(400,'URL inválida. Usa http:// o https://.');
+  // El switch de Fuente decide "¿está prendido este canal?" comparando la
+  // fuente en vivo de la pantalla contra la URL del canal — dos canales
+  // con la MISMA URL serían indistinguibles para ese switch y se
+  // prenderían/apagarían siempre juntos, rompiendo la regla de "solo uno
+  // a la vez encendido".
+  if(db.prepare('SELECT 1 FROM channels WHERE tenant=? AND url=?').get(req.user.tenant,url))throw fail(409,'Ya existe un canal con esa misma URL.');
   const id=randomUUID();
   db.prepare('INSERT INTO channels (id,tenant,location,name,url) VALUES (?,?,?,?,?)').run(id,req.user.tenant,location||null,nameOf(name),url);
   res.status(201).json({id});

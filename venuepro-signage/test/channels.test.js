@@ -33,8 +33,17 @@ test('Canales: aislamiento por tenant, requieren URL válida, se pueden activar 
     const created = await req('/api/channels', { cookie: a, body: { name: 'Digital Signage', location: loc.id, url: 'http://192.168.1.10:1984/api/stream.mp4?src=mivideo' } });
     assert.equal(created.status, 201);
 
+    // La regla es "un canal a la vez encendido" por pantalla — eso se
+    // decide comparando la fuente en vivo contra la URL del canal, así
+    // que dos canales con la MISMA URL serían indistinguibles y se
+    // prenderían/apagarían siempre juntos. Se bloquea al crear.
+    const dup = await req('/api/channels', { cookie: a, body: { name: 'Otro nombre', url: 'http://192.168.1.10:1984/api/stream.mp4?src=mivideo' } });
+    assert.equal(dup.status, 409);
+    // Mismo tenant y URL exacta bloquea; otro tenant SÍ puede usar esa URL (aislado).
+    assert.equal((await req('/api/channels', { cookie: b, body: { name: 'Digital Signage', url: 'http://192.168.1.10:1984/api/stream.mp4?src=mivideo' } })).status, 201);
+
     assert.equal((await req('/api/channels', { cookie: a })).data.length, 1);
-    assert.equal((await req('/api/channels', { cookie: b })).data.length, 0); // aislado por tenant
+    assert.equal((await req('/api/channels', { cookie: b })).data.length, 1); // aislado por tenant (b ya tiene la suya, distinta cuenta)
     assert.equal((await req('/api/state', { cookie: a })).data.channels.length, 1);
 
     // Activarlo como fuente en vivo de una pantalla (lo que hace el switch en la ficha)

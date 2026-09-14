@@ -66,9 +66,9 @@ jobs:
           # el mensaje real — busca la sección "What went wrong" (o
           # "FAILURE:") y manda ESO como anotación en vez de las últimas
           # líneas a ciegas.
-          section=$(awk '/^\* What went wrong:/{f=1} f' /tmp/gradle-build.log | head -n 30)
-          [ -n "$section" ] || section=$(grep -A 30 '^FAILURE:' /tmp/gradle-build.log | head -n 30)
-          [ -n "$section" ] || section=$(tail -n 30 /tmp/gradle-build.log)
+          section=$(awk '/^\* What went wrong:/{f=1} f' /tmp/gradle-build.log | head -n 100)
+          [ -n "$section" ] || section=$(grep -A 100 '^FAILURE:' /tmp/gradle-build.log | head -n 100)
+          [ -n "$section" ] || section=$(tail -n 60 /tmp/gradle-build.log)
           while IFS= read -r line; do
             [ -n "$line" ] || continue
             esc=$(printf '%s' "$line" | sed 's/%/%25/g; s/\r/%0D/g; s/\n/%0A/g')

@@ -979,7 +979,7 @@ function deviceSheet() {
       })()}
     </div>
     ${d.liveSource ? `<div class="row-tap" style="text-align:center;padding:10px 0;border-radius:12px;background:${d.mix ? 'rgba(47,123,246,.12)' : 'var(--card-2)'};border:1px solid ${d.mix ? 'var(--accent)' : 'var(--line)'};font:600 12px var(--sans);margin-bottom:10px" ${A('openMix', d.id)}>🎛️ ${d.mix ? 'Editar mezcla' : 'Mezclar sobre la señal'}</div>` : ''}
-    ${remote.ptzCameras.some(c => c.location === d.location) ? `<div class="row-tap" style="text-align:center;padding:10px 0;border-radius:12px;background:var(--card-2);border:1px solid var(--line);font:600 12px var(--sans);margin-bottom:16px" ${A('openPtzFromDevice', d.id)}>📹 Control PTZ</div>` : ''}
+    ${d.location && remote.ptzCameras.some(c => c.location === d.location) ? `<div class="row-tap" style="text-align:center;padding:10px 0;border-radius:12px;background:var(--card-2);border:1px solid var(--line);font:600 12px var(--sans);margin-bottom:16px" ${A('openPtzFromDevice', d.id)}>📹 Control PTZ</div>` : ''}
 
     <div class="eyebrow">Lista de reproducción</div>
     <div class="row" style="gap:8px;margin-bottom:16px">
