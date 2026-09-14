@@ -74,6 +74,34 @@ test('Mezcla sobre la señal en vivo: requiere live_source, valida assets, plant
     assert.equal((await req('/api/mix-templates', { cookie: a })).data.length, 1);
     assert.equal((await req('/api/mix-templates', { cookie: b })).data.length, 0);
     assert.equal((await req('/api/mix-templates', { cookie: b, body: { name: 'Ajena', layout: 'lower', promo: null, logo: logoId, text: '', muted: false } })).status, 400);
+
+    // "Marca consistente en cada pantalla" — aplicar a muchas de un toque
+    await req(`/api/devices/${deviceId}/live-source`, { cookie: a, body: { url: 'http://192.168.1.10:1984/stream.html?src=mivideo' } });
+    const loc = (await req('/api/locations', { cookie: a, body: { name: 'Sucursal 2' } })).data;
+    const pair2 = (await req('/api/pair/start', { method: 'POST' })).data;
+    await req('/api/pair/claim', { cookie: a, body: { code: pair2.code, name: 'Barra 2', location: loc.id } });
+    const pair3 = (await req('/api/pair/start', { method: 'POST' })).data;
+    await req('/api/pair/claim', { cookie: a, body: { code: pair3.code, name: 'Sin señal' } });
+    const devices = (await req('/api/state', { cookie: a })).data.devices;
+    const device2Id = devices.find(d => d.name === 'Barra 2').id;
+    const device3Id = devices.find(d => d.name === 'Sin señal').id;
+    await req(`/api/devices/${device2Id}/live-source`, { cookie: a, body: { url: 'http://192.168.1.11:1984/stream.html?src=mivideo' } });
+    // device3 se queda sin fuente en vivo — debe contarse como omitida, no fallar
+
+    assert.equal((await req(`/api/mix-templates/${tpl.data.id}/apply-all`, { cookie: b, body: { location: null } })).status, 404); // otro tenant, no existe para él
+    const applied = await req(`/api/mix-templates/${tpl.data.id}/apply-all`, { cookie: a, body: { location: null } });
+    assert.equal(applied.status, 200);
+    assert.equal(applied.data.applied, 2); // deviceId + device2Id (con señal en vivo)
+    assert.equal(applied.data.skipped, 1); // device3Id, sin señal en vivo
+    let updated = (await req('/api/state', { cookie: a })).data.devices;
+    assert.deepEqual(updated.find(d => d.id === device2Id).mix, { layout: 'split', promo: null, logo: logoId, text: 'Happy hour 5-7pm', muted: false });
+    assert.equal(updated.find(d => d.id === device3Id).mix, null);
+
+    const appliedToLoc = await req(`/api/mix-templates/${tpl.data.id}/apply-all`, { cookie: a, body: { location: loc.id } });
+    assert.equal(appliedToLoc.data.applied, 1); // solo device2Id vive en esa ubicación
+    assert.equal(appliedToLoc.data.skipped, 0);
+    assert.equal((await req(`/api/mix-templates/${tpl.data.id}/apply-all`, { cookie: a, body: { location: 'missing' } })).status, 404);
+
     assert.equal((await req(`/api/mix-templates/${tpl.data.id}`, { cookie: b, method: 'DELETE' })).status, 404);
     assert.equal((await req(`/api/mix-templates/${tpl.data.id}`, { cookie: a, method: 'DELETE' })).status, 200);
     assert.equal((await req('/api/mix-templates', { cookie: a })).data.length, 0);

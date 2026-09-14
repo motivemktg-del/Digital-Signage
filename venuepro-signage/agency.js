@@ -36,7 +36,7 @@ export function installAgency(app,db,env,origin,deviceManifest){
   if(['studio.getConfig','studio.config','studio.verify','studio.drafts','studio.draft','studio.create','studio.update','studio.deleteDraft','studio.jobs','studio.retry','studio.generate'].includes(b.action)){
    try{return await app.locals.runManagement(b.action,link.tenant,b,req,res);}catch(error){return next(error);}
   }
-  if(['playlist.save','playlist.delete','asset.rename','asset.archive','pair.claim','location.create','location.delete','device.location','device.display','device.liveSource','device.mix','device.playback','device.sync','device.revoke','schedule.save','schedule.delete','ptz.create','ptz.delete','ptz.savePreset','ptz.deletePreset','ptz.command','mixTemplate.create','mixTemplate.delete'].includes(b.action)){
+  if(['playlist.save','playlist.delete','asset.rename','asset.archive','pair.claim','location.create','location.delete','device.location','device.display','device.liveSource','device.mix','device.playback','device.sync','device.revoke','schedule.save','schedule.delete','ptz.create','ptz.delete','ptz.savePreset','ptz.deletePreset','ptz.command','mixTemplate.create','mixTemplate.delete','mixTemplate.applyAll'].includes(b.action)){
    try{return await app.locals.runManagement(b.action,link.tenant,b,req,res);}catch(error){return next(error);}
   }
   return res.status(400).json({error:'Acción no permitida.'});

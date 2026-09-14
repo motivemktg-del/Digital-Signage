@@ -300,6 +300,26 @@ const actions = {
     if (!confirm('¿Eliminar esta plantilla?')) return;
     await run(deleteMixTemplate(id), 'Plantilla eliminada');
   },
+  // "Marca consistente en cada pantalla que manejas" — aplica de un toque,
+  // con el mismo patrón de confirmar-antes-de-actuar que todo lo demás.
+  async applyMixTemplateToLocation(id) {
+    const t = (remote.mixTemplates || []).find(t => t.id === id); if (!t) return;
+    const d = remote.devices.find(d => d.id === ui.mixDeviceId);
+    const location = d ? d.location : null;
+    if (!location) return showToast('Esta pantalla no tiene ubicación asignada', true);
+    const loc = remote.locations.find(l => l.id === location);
+    const n = remote.devices.filter(x => x.location === location && x.liveSource).length;
+    if (n === 0) return showToast('Ninguna pantalla de esta ubicación tiene señal en vivo', true);
+    if (!confirm(`¿Aplicar "${t.name}" a las ${n} pantalla(s) con señal en vivo de "${loc ? loc.name : 'esta ubicación'}"?`)) return;
+    await run(applyMixTemplateToAll(id, location), `Aplicada a ${n} pantalla(s)`);
+  },
+  async applyMixTemplateToAllNow(id) {
+    const t = (remote.mixTemplates || []).find(t => t.id === id); if (!t) return;
+    const n = remote.devices.filter(x => x.liveSource).length;
+    if (n === 0) return showToast('Ninguna de tus pantallas tiene señal en vivo', true);
+    if (!confirm(`¿Aplicar "${t.name}" a TODAS tus pantallas con señal en vivo (${n})?`)) return;
+    await run(applyMixTemplateToAll(id, null), `Aplicada a ${n} pantalla(s)`);
+  },
   async useDefaultPlaylistSource(id) {
     const d = remote.devices.find(d => d.id === id); if (!d.liveSource) return;
     await run(setLiveSource(id, null), 'Fuente en vivo quitada');
@@ -775,8 +795,10 @@ function viewMix() {
       </div>
       <div class="stack" style="margin-bottom:16px">
         ${templates.length === 0 ? `<div style="padding:10px 0;text-align:center;color:var(--ink-faint);font:400 11px var(--sans)">Sin plantillas guardadas.</div>` : templates.map(t => `
-        <div class="row card-flat row-tap" style="padding:11px 13px" ${A('applyMixTemplate', t.id)}>
+        <div class="row card-flat row-tap" style="padding:11px 13px;gap:6px" ${A('applyMixTemplate', t.id)}>
           <div style="flex:1;min-width:0"><div style="font:600 12.5px var(--sans);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(t.name)}</div><div style="font:400 10px var(--mono);color:var(--ink-dimmer)">${layoutLabel[t.layout] || t.layout}${t.text ? ' · ' + esc(t.text) : ''}</div></div>
+          ${d.location ? `<div class="row-tap" title="Aplicar a toda la ubicación" style="width:28px;height:28px;border-radius:8px;flex:none;display:flex;align-items:center;justify-content:center;background:var(--card)" ${A('applyMixTemplateToLocation', t.id)}>📍</div>` : ''}
+          <div class="row-tap" title="Aplicar a todas mis pantallas" style="width:28px;height:28px;border-radius:8px;flex:none;display:flex;align-items:center;justify-content:center;background:var(--card)" ${A('applyMixTemplateToAllNow', t.id)}>📡</div>
           <div class="row-tap" title="Eliminar" style="width:28px;height:28px;border-radius:8px;flex:none;display:flex;align-items:center;justify-content:center;background:rgba(242,99,90,.1)" ${A('deleteMixTemplateNow', t.id)}>🗑️</div>
         </div>`).join('')}
       </div>

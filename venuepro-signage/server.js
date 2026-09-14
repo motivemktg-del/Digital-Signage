@@ -144,6 +144,26 @@ export function createApp(env = process.env, studioOptions = {}) {
   if(!db.prepare('DELETE FROM mix_templates WHERE id=? AND tenant=?').run(req.params.id,req.user.tenant).changes)throw fail(404,'Plantilla no encontrada.');
   res.json({ok:true});
  })));
+ // Aplicar una plantilla a MUCHAS pantallas de una — "marca consistente en
+ // cada comedor que manejas". Solo toca las que ya tienen señal en vivo
+ // (mix no tiene sentido sin eso); a las demás las cuenta como "omitidas".
+ app.post('/api/mix-templates/:id/apply-all',admin,wrap(managed('mixTemplate.applyAll',async(req,res)=>{
+  const t=db.prepare('SELECT * FROM mix_templates WHERE id=? AND tenant=?').get(req.params.id,req.user.tenant);
+  if(!t)throw fail(404,'Plantilla no encontrada.');
+  const location=req.body.location||null;
+  if(location&&!db.prepare('SELECT 1 FROM locations WHERE id=? AND tenant=?').get(location,req.user.tenant))throw fail(404,'Ubicación no encontrada.');
+  const devices=location
+   ?db.prepare('SELECT id,live_source FROM devices WHERE tenant=? AND location=?').all(req.user.tenant,location)
+   :db.prepare('SELECT id,live_source FROM devices WHERE tenant=?').all(req.user.tenant);
+  const mix=JSON.stringify({layout:t.layout,promo:t.promo,logo:t.logo,text:t.text,muted:!!t.muted});
+  let applied=0;
+  for(const d of devices){
+   if(!d.live_source)continue;
+   db.prepare('UPDATE devices SET mix=?,revision=revision+1 WHERE id=?').run(mix,d.id);
+   applied++;
+  }
+  res.json({ok:true,applied,skipped:devices.length-applied});
+ })));
  app.post('/api/pair/start',limit('pair-start',20),wrap(async(req,res)=>{
   db.prepare('DELETE FROM devices WHERE tenant IS NULL AND expires<?').run(Date.now());
   const id=randomUUID(),secret=token(),code=token().slice(0,12).toUpperCase();

@@ -58,6 +58,7 @@ function clearMix(id) { return api(`/api/devices/${id}/mix`, { method: 'POST', b
 function listMixTemplates() { return api('/api/mix-templates'); }
 function createMixTemplate(payload) { return api('/api/mix-templates', { method: 'POST', body: payload }); } // {name,layout,promo,logo,text,muted}
 function deleteMixTemplate(id) { return api(`/api/mix-templates/${id}`, { method: 'DELETE' }); }
+function applyMixTemplateToAll(id, location) { return api(`/api/mix-templates/${id}/apply-all`, { method: 'POST', body: { location } }); } // location:null = todas mis pantallas
 
 // ---- emparejar pantalla nueva -------------------------------------------
 
