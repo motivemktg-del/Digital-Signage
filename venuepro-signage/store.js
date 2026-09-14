@@ -38,6 +38,12 @@ export function openStore(dir) {
   // ptz_cameras, es la ÚLTIMA intención — el reproductor real (Android o el
   // agente local) es quien compone la imagen de verdad. NULL = sin mezcla.
   if(!columns.includes('mix'))db.exec('ALTER TABLE devices ADD COLUMN mix TEXT');
+  // Alerta de emergencia: {text, level:'info'|'warning'|'critical', issued}.
+  // A diferencia de mix, funciona con CUALQUIER cosa en pantalla (en vivo
+  // o lista normal) — es una capa aparte, siempre arriba de todo lo demás
+  // (incluida la mezcla, si hay una activa). NULL = sin alerta. Se apaga
+  // a mano (clear), sin vencimiento automático por ahora.
+  if(!columns.includes('alert'))db.exec('ALTER TABLE devices ADD COLUMN alert TEXT');
   if(!db.prepare('PRAGMA table_info(users)').all().some(c=>c.name==='role'))db.exec("ALTER TABLE users ADD COLUMN role TEXT NOT NULL DEFAULT 'admin'");
   if(!db.prepare('PRAGMA table_info(assets)').all().some(c=>c.name==='archived'))db.exec('ALTER TABLE assets ADD COLUMN archived INTEGER NOT NULL DEFAULT 0');
   // Carpetas para organizar la biblioteca (solo agrupan — no cambian dónde

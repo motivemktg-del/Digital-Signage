@@ -382,6 +382,33 @@ const actions = {
     if (!confirm(`¿Aplicar "${t.name}" a TODAS tus pantallas con señal en vivo (${n})?`)) return;
     await run(applyMixTemplateToAll(id, null), `Aplicada a ${n} pantalla(s)`);
   },
+  // -- alerta de emergencia (backend real: ver /api/devices/:id/alert y
+  // /api/alerts/broadcast en server.js) — a diferencia del mezclador,
+  // funciona con CUALQUIER cosa en pantalla, no necesita señal en vivo.
+  async sendAlertNow(id) {
+    const text = prompt('Texto de la alerta (ej. "Cierre anticipado por clima"):'); if (!text) return;
+    const level = (prompt('Nivel: info / warning / critical', 'warning') || '').trim().toLowerCase();
+    if (!['info', 'warning', 'critical'].includes(level)) return showToast('Nivel inválido — usa info, warning o critical', true);
+    await run(setAlert(id, { text, level }), 'Alerta enviada');
+  },
+  async clearAlertNow(id) {
+    await run(clearAlert(id), 'Alerta quitada');
+  },
+  async broadcastAlertNow() {
+    const n = remote.devices.length;
+    if (n === 0) return showToast('No tienes pantallas todavía', true);
+    const text = prompt(`Texto de la alerta para TODAS tus pantallas (${n}):`); if (!text) return;
+    const level = (prompt('Nivel: info / warning / critical', 'warning') || '').trim().toLowerCase();
+    if (!['info', 'warning', 'critical'].includes(level)) return showToast('Nivel inválido — usa info, warning o critical', true);
+    if (!confirm(`¿Enviar esta alerta a las ${n} pantalla(s)?`)) return;
+    const res = await run(broadcastAlert({ text, level, location: null }), null);
+    if (res) showToast(`Alerta enviada a ${res.applied} pantalla(s)`);
+  },
+  async clearAllAlertsNow() {
+    if (!confirm('¿Quitar la alerta de TODAS tus pantallas?')) return;
+    const res = await run(clearAllAlerts(null), null);
+    if (res) showToast(`Alerta quitada de ${res.applied} pantalla(s)`);
+  },
   // -- emparejar --
   // El código lo genera la PANTALLA (la TV/tablet llama a /api/pair/start
   // sola, sin sesión, y muestra su propio QR+código) — el admin solo lo
@@ -560,9 +587,12 @@ function toastHtml() {
   return `<div style="position:fixed;left:50%;bottom:96px;transform:translateX(-50%);background:${ui.toast.isError ? '#3a1f1d' : '#1b1d22'};border:1px solid ${ui.toast.isError ? 'rgba(242,99,90,.4)' : 'var(--line)'};color:#fff;padding:10px 16px;border-radius:12px;font:600 12.5px var(--sans);z-index:30;max-width:88%;box-shadow:0 6px 20px rgba(0,0,0,.35)">${esc(ui.toast.msg)}</div>`;
 }
 function topbar(title) {
+  // El 🚨 solo va en Pantallas — es un disparador de emergencia para TODAS
+  // las pantallas de una, no pinta tenerlo repetido en cada pestaña.
   return `<div class="topbar" style="justify-content:space-between">
     <div class="title">${esc(title)}</div>
     <div style="display:flex;align-items:center;gap:14px">
+      ${title === 'Pantallas' ? `<div class="row-tap" title="Alerta de emergencia a todas las pantallas" style="font-size:18px;line-height:1" ${A('broadcastAlertNow')}>🚨</div>` : ''}
       <div class="row-tap" title="Ajustes" style="font-size:18px;line-height:1" ${A('goTab', 'settings')}>⚙️</div>
     </div>
   </div>`;
@@ -756,7 +786,8 @@ function deviceRow(d) {
   const firstItem = playlist && playlist.items[0];
   const firstChannel = firstItem && firstItem.channel ? remote.channels.find(c => c.id === firstItem.channel) : null;
   const firstAsset = firstItem && !firstItem.channel ? remote.assets.find(a => a.id === firstItem.asset) : null;
-  return `<div class="card row-tap" style="overflow:hidden" ${A('openDevice', d.id)}>
+  return `<div class="card row-tap" style="overflow:hidden;position:relative" ${A('openDevice', d.id)}>
+    ${d.alert ? `<div title="${esc(d.alert.text)}" style="position:absolute;top:6px;right:6px;z-index:1;font-size:14px;line-height:1;filter:drop-shadow(0 1px 2px rgba(0,0,0,.5))">🚨</div>` : ''}
     ${previewThumb(d, firstAsset, firstChannel)}
     <div style="padding:9px 10px 11px">
       <div class="row" style="gap:6px;margin-bottom:3px">
@@ -983,8 +1014,13 @@ function deviceSheet() {
         <div style="flex:1;min-width:0"><div style="font:600 12.5px var(--sans);margin-bottom:2px">Sin canales todavía</div><div style="font:400 10.5px var(--mono);color:var(--ink-dimmer)">configúralos en Contenido → Canales</div></div>
       </div>` : ''}`;
     })()}
-    ${d.liveSource ? `<div class="row" style="justify-content:flex-end;margin-bottom:10px">
-      <div class="row-tap" style="padding:7px 16px;border-radius:10px;background:${d.mix ? 'rgba(47,123,246,.12)' : 'var(--card-2)'};border:1px solid ${d.mix ? 'var(--accent)' : 'var(--line)'};font:600 12px var(--sans)" ${A('openMix', d.id)}>🎛️ Mezclar</div>
+    <div class="row" style="justify-content:flex-end;gap:8px;margin-bottom:10px">
+      ${d.liveSource ? `<div class="row-tap" style="padding:7px 16px;border-radius:10px;background:${d.mix ? 'rgba(47,123,246,.12)' : 'var(--card-2)'};border:1px solid ${d.mix ? 'var(--accent)' : 'var(--line)'};font:600 12px var(--sans)" ${A('openMix', d.id)}>🎛️ Mezclar</div>` : ''}
+      <div class="row-tap" style="padding:7px 16px;border-radius:10px;background:${d.alert ? 'rgba(242,99,90,.14)' : 'var(--card-2)'};border:1px solid ${d.alert ? 'var(--red)' : 'var(--line)'};font:600 12px var(--sans)" ${A('sendAlertNow', d.id)}>🚨 Alerta</div>
+    </div>
+    ${d.alert ? `<div class="row" style="gap:8px;padding:9px 12px;border-radius:10px;background:rgba(242,99,90,.1);border:1px solid rgba(242,99,90,.3);margin-bottom:12px">
+      <div style="flex:1;min-width:0"><div style="font:600 11.5px var(--sans);color:var(--red)">${esc(d.alert.text)}</div><div style="font:400 9.5px var(--mono);color:var(--ink-dimmer)">${{ info: 'informativa', warning: 'advertencia', critical: 'crítica' }[d.alert.level] || d.alert.level}</div></div>
+      <div class="row-tap" style="font:600 11px var(--sans);color:var(--ink-dimmer)" ${A('clearAlertNow', d.id)}>Quitar</div>
     </div>` : ''}
     ${d.location && remote.ptzCameras.some(c => c.location === d.location) ? `<div class="row-tap" style="text-align:center;padding:10px 0;border-radius:12px;background:var(--card-2);border:1px solid var(--line);font:600 12px var(--sans);margin-bottom:16px" ${A('openPtzFromDevice', d.id)}>📹 Control PTZ</div>` : ''}
 

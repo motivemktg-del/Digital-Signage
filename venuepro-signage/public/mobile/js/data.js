@@ -57,6 +57,10 @@ function setLiveSource(id, url) { return api(`/api/devices/${id}/live-source`, {
 function setLiveChannel(id, channel) { return api(`/api/devices/${id}/live-channel`, { method: 'POST', body: { channel } }); } // channel:null apaga; se identifica por id, no por URL (evita que 2 canales con la misma URL se vean "prendidos" juntos)
 function setMix(id, payload) { return api(`/api/devices/${id}/mix`, { method: 'POST', body: payload }); } // {layout,promo,logo,text,muted}
 function clearMix(id) { return api(`/api/devices/${id}/mix`, { method: 'POST', body: { clear: true } }); }
+function setAlert(id, payload) { return api(`/api/devices/${id}/alert`, { method: 'POST', body: payload }); } // {text,level:'info'|'warning'|'critical'}
+function clearAlert(id) { return api(`/api/devices/${id}/alert`, { method: 'POST', body: { clear: true } }); }
+function broadcastAlert(payload) { return api('/api/alerts/broadcast', { method: 'POST', body: payload }); } // {text,level,location?} — location:null = todas mis pantallas
+function clearAllAlerts(location) { return api('/api/alerts/clear-all', { method: 'POST', body: { location } }); }
 function listMixTemplates() { return api('/api/mix-templates'); }
 function createMixTemplate(payload) { return api('/api/mix-templates', { method: 'POST', body: payload }); } // {name,layout,promo,logo,text,muted}
 function deleteMixTemplate(id) { return api(`/api/mix-templates/${id}`, { method: 'DELETE' }); }

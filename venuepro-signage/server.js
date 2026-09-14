@@ -43,7 +43,7 @@ export function deviceManifest(db, d, origin) {
  const schedules=db.prepare('SELECT * FROM schedules WHERE device=? AND tenant=? ORDER BY priority DESC,id ASC').all(d.id,d.tenant).map(s=>({id:s.id,name:s.name,timezone:s.timezone,days:JSON.parse(s.days),start:s.start,end:s.end,fromDate:s.fromDate,toDate:s.toDate,priority:s.priority,items:expand(s.playlist)}));
  const assetUrl=id=>{const a=id&&db.prepare('SELECT * FROM assets WHERE id=? AND tenant=?').get(id,d.tenant);return a?origin+'/api/player/media/'+a.id:null;};
  const mixOut=()=>{if(!d.mix)return null;const m=JSON.parse(d.mix);return {...m,promoUrl:assetUrl(m.promo),logoUrl:assetUrl(m.logo)};};
- const payload={paired:true,name:d.name,paused:!!d.paused,revision:d.revision||0,display:{orientation:d.orientation||'auto',rotation:d.rotation||0,fit:d.fit||'cover'},liveSource:d.live_source||null,liveSourceRtsp:d.live_source?deriveRtspUrl(d.live_source):null,liveSourceWebrtc:d.live_source?deriveWebrtcUrl(d.live_source):null,mix:mixOut(),items:expand(d.playlist),schedules};return {...payload,version:hash(JSON.stringify(payload))};
+ const payload={paired:true,name:d.name,paused:!!d.paused,revision:d.revision||0,display:{orientation:d.orientation||'auto',rotation:d.rotation||0,fit:d.fit||'cover'},liveSource:d.live_source||null,liveSourceRtsp:d.live_source?deriveRtspUrl(d.live_source):null,liveSourceWebrtc:d.live_source?deriveWebrtcUrl(d.live_source):null,mix:mixOut(),alert:d.alert?JSON.parse(d.alert):null,items:expand(d.playlist),schedules};return {...payload,version:hash(JSON.stringify(payload))};
 }
 // Trae una URL de video (MJPEG/MP4 — cualquier respuesta HTTP simple, sin
 // sub-recursos ni WebSocket) y la repite tal cual al navegador, como si
@@ -204,7 +204,7 @@ export function createApp(env = process.env, studioOptions = {}) {
   if(db.prepare('SELECT 1 FROM devices WHERE tenant=? AND playlist=?').get(req.user.tenant,req.params.id)||db.prepare('SELECT 1 FROM schedules WHERE tenant=? AND playlist=?').get(req.user.tenant,req.params.id))throw fail(409,'La lista está asignada a una pantalla o un programa. Cambia esa asignación primero.');
   if(!db.prepare('DELETE FROM playlists WHERE id=? AND tenant=?').run(req.params.id,req.user.tenant).changes)throw fail(404,'Lista no encontrada.');res.json({ok:true});
  })));
- app.get('/api/state',admin,(req,res)=>res.json({workspaceId:req.user.tenant,tenant:req.user.name,role:req.user.role,email:req.user.email,locations:db.prepare('SELECT id,name FROM locations WHERE tenant=? ORDER BY name').all(req.user.tenant),devices:db.prepare('SELECT id,tenant,name,playlist,seen,version,error,location,paused,revision,orientation,rotation,fit,live_source AS liveSource,live_source_saved AS liveSourceSaved,live_channel AS liveChannel,mix FROM devices WHERE tenant=?').all(req.user.tenant).map(d=>({...d,mix:d.mix?JSON.parse(d.mix):null,targetVersion:deviceManifest(db,d,origin).version})),assets:db.prepare('SELECT id,name,type,size,sha,folder FROM assets WHERE tenant=? AND archived=0').all(req.user.tenant),assetFolders:db.prepare('SELECT * FROM asset_folders WHERE tenant=? ORDER BY name').all(req.user.tenant),playlists:db.prepare('SELECT * FROM playlists WHERE tenant=?').all(req.user.tenant).map(p=>({...p,items:JSON.parse(p.items)})),schedules:db.prepare('SELECT * FROM schedules WHERE tenant=? ORDER BY start,priority DESC').all(req.user.tenant).map(s=>({...s,days:JSON.parse(s.days)})),ptzCameras:db.prepare('SELECT * FROM ptz_cameras WHERE tenant=?').all(req.user.tenant).map(ptzOut),mixTemplates:db.prepare('SELECT * FROM mix_templates WHERE tenant=? ORDER BY name').all(req.user.tenant).map(t=>({...t,muted:!!t.muted})),channels:db.prepare('SELECT * FROM channels WHERE tenant=? ORDER BY name').all(req.user.tenant)}));
+ app.get('/api/state',admin,(req,res)=>res.json({workspaceId:req.user.tenant,tenant:req.user.name,role:req.user.role,email:req.user.email,locations:db.prepare('SELECT id,name FROM locations WHERE tenant=? ORDER BY name').all(req.user.tenant),devices:db.prepare('SELECT id,tenant,name,playlist,seen,version,error,location,paused,revision,orientation,rotation,fit,live_source AS liveSource,live_source_saved AS liveSourceSaved,live_channel AS liveChannel,mix,alert FROM devices WHERE tenant=?').all(req.user.tenant).map(d=>({...d,mix:d.mix?JSON.parse(d.mix):null,alert:d.alert?JSON.parse(d.alert):null,targetVersion:deviceManifest(db,d,origin).version})),assets:db.prepare('SELECT id,name,type,size,sha,folder FROM assets WHERE tenant=? AND archived=0').all(req.user.tenant),assetFolders:db.prepare('SELECT * FROM asset_folders WHERE tenant=? ORDER BY name').all(req.user.tenant),playlists:db.prepare('SELECT * FROM playlists WHERE tenant=?').all(req.user.tenant).map(p=>({...p,items:JSON.parse(p.items)})),schedules:db.prepare('SELECT * FROM schedules WHERE tenant=? ORDER BY start,priority DESC').all(req.user.tenant).map(s=>({...s,days:JSON.parse(s.days)})),ptzCameras:db.prepare('SELECT * FROM ptz_cameras WHERE tenant=?').all(req.user.tenant).map(ptzOut),mixTemplates:db.prepare('SELECT * FROM mix_templates WHERE tenant=? ORDER BY name').all(req.user.tenant).map(t=>({...t,muted:!!t.muted})),channels:db.prepare('SELECT * FROM channels WHERE tenant=? ORDER BY name').all(req.user.tenant)}));
  app.post('/api/devices/:id/display',admin,wrap(managed('device.display',async(req,res)=>{
   const {orientation,rotation,fit}=req.body;
   if(!['auto','landscape','portrait'].includes(orientation)||![0,90,180,270].includes(rotation)||!['cover','contain'].includes(fit))throw fail(400,'Configuración de pantalla inválida.');
@@ -324,6 +324,50 @@ export function createApp(env = process.env, studioOptions = {}) {
    applied++;
   }
   res.json({ok:true,applied,skipped:devices.length-applied});
+ })));
+ // ---- Alerta de emergencia — a diferencia de mix, funciona con CUALQUIER
+ // cosa en pantalla (en vivo o lista normal), no requiere live_source. Es
+ // control-plane puro igual que el resto: guarda la intención, el
+ // reproductor real la dibuja encima de todo (incluida la mezcla, si hay
+ // una activa) al leerla del manifiesto.
+ const ALERT_LEVELS=['info','warning','critical'];
+ app.post('/api/devices/:id/alert',admin,wrap(managed('device.alert',async(req,res)=>{
+  const b=req.body;
+  if(b.clear){
+   if(!db.prepare('UPDATE devices SET alert=NULL,revision=revision+1 WHERE id=? AND tenant=?').run(req.params.id,req.user.tenant).changes)throw fail(404,'Pantalla no encontrada.');
+   return res.json({ok:true});
+  }
+  if(typeof b.text!=='string'||!b.text.trim()||b.text.length>200)throw fail(400,'Escribe el texto de la alerta (máximo 200 caracteres).');
+  if(!ALERT_LEVELS.includes(b.level))throw fail(400,'Elige un nivel de alerta válido.');
+  const alert=JSON.stringify({text:b.text.trim(),level:b.level,issued:Date.now()});
+  if(!db.prepare('UPDATE devices SET alert=?,revision=revision+1 WHERE id=? AND tenant=?').run(alert,req.params.id,req.user.tenant).changes)throw fail(404,'Pantalla no encontrada.');
+  res.json({ok:true});
+ })));
+ // Mandar la MISMA alerta a muchas pantallas de una — "aviso de emergencia
+ // ya mismo en todo el local (o en una ubicación)", el caso de uso real.
+ app.post('/api/alerts/broadcast',admin,wrap(managed('alert.broadcast',async(req,res)=>{
+  const b=req.body;
+  if(typeof b.text!=='string'||!b.text.trim()||b.text.length>200)throw fail(400,'Escribe el texto de la alerta (máximo 200 caracteres).');
+  if(!ALERT_LEVELS.includes(b.level))throw fail(400,'Elige un nivel de alerta válido.');
+  const location=b.location||null;
+  if(location&&!db.prepare('SELECT 1 FROM locations WHERE id=? AND tenant=?').get(location,req.user.tenant))throw fail(404,'Ubicación no encontrada.');
+  const devices=location
+   ?db.prepare('SELECT id FROM devices WHERE tenant=? AND location=?').all(req.user.tenant,location)
+   :db.prepare('SELECT id FROM devices WHERE tenant=?').all(req.user.tenant);
+  const alert=JSON.stringify({text:b.text.trim(),level:b.level,issued:Date.now()});
+  for(const d of devices)db.prepare('UPDATE devices SET alert=?,revision=revision+1 WHERE id=?').run(alert,d.id);
+  res.json({ok:true,applied:devices.length});
+ })));
+ // Igual que broadcast pero para APAGAR — "ya pasó la emergencia" en
+ // todas las pantallas (o una ubicación) de una sola vez.
+ app.post('/api/alerts/clear-all',admin,wrap(managed('alert.clearAll',async(req,res)=>{
+  const location=req.body.location||null;
+  if(location&&!db.prepare('SELECT 1 FROM locations WHERE id=? AND tenant=?').get(location,req.user.tenant))throw fail(404,'Ubicación no encontrada.');
+  const devices=location
+   ?db.prepare('SELECT id FROM devices WHERE tenant=? AND location=? AND alert IS NOT NULL').all(req.user.tenant,location)
+   :db.prepare('SELECT id FROM devices WHERE tenant=? AND alert IS NOT NULL').all(req.user.tenant);
+  for(const d of devices)db.prepare('UPDATE devices SET alert=NULL,revision=revision+1 WHERE id=?').run(d.id);
+  res.json({ok:true,applied:devices.length});
  })));
  // ---- Canales — fuente en vivo configurada UNA vez por ubicación (no en
  // cada pantalla). La ficha de pantalla solo prende/apaga un switch por

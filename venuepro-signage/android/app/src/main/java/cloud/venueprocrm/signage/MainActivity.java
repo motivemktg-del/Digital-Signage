@@ -81,6 +81,13 @@ public class MainActivity extends Activity {
  // porque layoutDisplay() se puede llamar seguido y no tiene sentido
  // re-descargar la misma imagen cada vez.
  private final Map<String,Bitmap> mixImageCache=new ConcurrentHashMap<>();
+ // Overlay de alerta de emergencia — SIEMPRE arriba de todo lo demás
+ // (incluido mixOverlay: se agrega a "root" DESPUÉS de él en cada
+ // syncAlertOverlay(), y FrameLayout dibuja los hijos más nuevos encima).
+ // A diferencia del mix, no depende de que haya señal en vivo — funciona
+ // igual con la lista normal de fotos/videos.
+ private FrameLayout alertOverlay;
+ private Runnable alertBlinkRunnable;
  @Override public void onCreate(Bundle b){super.onCreate(b);
   getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
   getWindow().getDecorView().setSystemUiVisibility(View.SYSTEM_UI_FLAG_FULLSCREEN|View.SYSTEM_UI_FLAG_HIDE_NAVIGATION|View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY);
@@ -193,7 +200,7 @@ public class MainActivity extends Activity {
   }
   return manifest.getJSONArray("items");
  }
- private void stopPlayback(){ui.removeCallbacks(advance);if(mediaPlayer!=null){mediaPlayer.release();mediaPlayer=null;}if(exoPlayer!=null){exoPlayer.release();exoPlayer=null;}if(webrtcPc!=null){webrtcPc.close();webrtcPc=null;}if(webrtcRenderer!=null){webrtcRenderer.release();webrtcRenderer=null;}video=null;canvas=null;videoWidth=0;videoHeight=0;if(photo!=null){photo.setImageDrawable(null);photo=null;}mixOverlay=null;livePlayingUrl="";playing=false;root.removeAllViews();}
+ private void stopPlayback(){ui.removeCallbacks(advance);if(alertBlinkRunnable!=null){ui.removeCallbacks(alertBlinkRunnable);alertBlinkRunnable=null;}if(mediaPlayer!=null){mediaPlayer.release();mediaPlayer=null;}if(exoPlayer!=null){exoPlayer.release();exoPlayer=null;}if(webrtcPc!=null){webrtcPc.close();webrtcPc=null;}if(webrtcRenderer!=null){webrtcRenderer.release();webrtcRenderer=null;}video=null;canvas=null;videoWidth=0;videoHeight=0;if(photo!=null){photo.setImageDrawable(null);photo=null;}mixOverlay=null;alertOverlay=null;livePlayingUrl="";playing=false;root.removeAllViews();}
  // Si el manifiesto trae liveSourceWebrtc, se intenta ESA primero — WebRTC
  // puede pedirle un keyframe al encoder al conectarse, cosa que RTSP no
  // puede hacer (solo espera al próximo programado). Si no logra conectar
@@ -472,6 +479,55 @@ public class MainActivity extends Activity {
   if(webrtcRenderer!=null)webrtcRenderer.setScalingType(cover?org.webrtc.RendererCommon.ScalingType.SCALE_ASPECT_FILL:org.webrtc.RendererCommon.ScalingType.SCALE_ASPECT_FIT);
   syncMixOverlay();
   if(mixOverlay!=null){mixOverlay.setLayoutParams(new FrameLayout.LayoutParams(w,h,Gravity.CENTER));mixOverlay.setRotation(angle);}
+  // La alerta va DESPUÉS del mix a propósito — se agrega más tarde a
+  // "root", así que FrameLayout la dibuja arriba de todo lo demás.
+  syncAlertOverlay();
+  if(alertOverlay!=null){alertOverlay.setLayoutParams(new FrameLayout.LayoutParams(w,h,Gravity.CENTER));alertOverlay.setRotation(angle);}
+ }
+ // Agrega/reconstruye/quita la alerta de emergencia según el manifiesto
+ // actual — mismo patrón que syncMixOverlay(), pero SIN el chequeo de
+ // liveSource (una alerta tiene sentido con cualquier cosa en pantalla).
+ private void syncAlertOverlay(){
+  if(alertOverlay!=null){root.removeView(alertOverlay);alertOverlay=null;}
+  if(alertBlinkRunnable!=null){ui.removeCallbacks(alertBlinkRunnable);alertBlinkRunnable=null;}
+  JSONObject alert=current==null?null:current.optJSONObject("alert");
+  if(alert==null||canvas==null)return;
+  alertOverlay=buildAlertOverlay(alert);
+  root.addView(alertOverlay,new FrameLayout.LayoutParams(-1,-1,Gravity.CENTER));
+ }
+ // 'info'/'warning': franja arriba, no tapa el contenido. 'critical': toma
+ // TODA la pantalla y parpadea — para que sea imposible de ignorar por
+ // descuido (un aviso de emergencia real, no un aviso más).
+ private FrameLayout buildAlertOverlay(JSONObject alert){
+  String text=alert.optString("text","");
+  String level=alert.optString("level","warning");
+  FrameLayout overlay=new FrameLayout(this);
+  if("critical".equals(level)){
+   final int solid=Color.argb(235,196,42,34),dim=Color.argb(120,196,42,34);
+   overlay.setBackgroundColor(solid);
+   TextView t=new TextView(this);t.setText("🚨 "+text);t.setTextColor(Color.WHITE);t.setTextSize(28);t.setTypeface(null,android.graphics.Typeface.BOLD);t.setGravity(Gravity.CENTER);t.setPadding(40,40,40,40);
+   t.setShadowLayer(6,0,2,Color.argb(180,0,0,0));
+   overlay.addView(t,new FrameLayout.LayoutParams(-1,-1,Gravity.CENTER));
+   alertBlinkRunnable=new Runnable(){
+    boolean on=true;
+    public void run(){
+     if(overlay!=alertOverlay)return; // ya se reemplazó/quitó — no seguir parpadeando algo que no se ve
+     overlay.setBackgroundColor(on?solid:dim);on=!on;
+     ui.postDelayed(this,600);
+    }
+   };
+   ui.postDelayed(alertBlinkRunnable,600);
+  }else{
+   boolean warning="warning".equals(level);
+   LinearLayout bar=new LinearLayout(this);bar.setOrientation(LinearLayout.HORIZONTAL);bar.setGravity(Gravity.CENTER);
+   bar.setBackgroundColor(warning?Color.rgb(240,180,41):Color.rgb(47,123,246));
+   bar.setPadding(24,16,24,16);
+   TextView t=new TextView(this);t.setText((warning?"⚠️ ":"ℹ️ ")+text);t.setTextColor(warning?Color.BLACK:Color.WHITE);t.setTextSize(14);t.setTypeface(null,android.graphics.Typeface.BOLD);t.setGravity(Gravity.CENTER);
+   bar.addView(t);
+   FrameLayout.LayoutParams lp=new FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT,FrameLayout.LayoutParams.WRAP_CONTENT,Gravity.TOP);
+   overlay.addView(bar,lp);
+  }
+  return overlay;
  }
  // Agrega/reconstruye/quita el overlay del mix según el manifiesto actual.
  // Se llama desde layoutDisplay(), que ya corre en cada creación de canvas
