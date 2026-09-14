@@ -36,7 +36,10 @@ jobs:
 
       # El runner de GitHub NO trae sdkmanager en el PATH por defecto (el
       # SDK preinstalado varía por imagen) — esta acción sí lo deja listo
-      # y acepta las licencias sola.
+      # y acepta las licencias sola. A veces falla sola por una descarga
+      # que se corta (nada que ver con el código) — si este paso falla,
+      # antes de investigar más a fondo probar de nuevo con el botón "Run
+      # workflow" en la pestaña Actions, o subiendo cualquier cambio.
       - name: Configurar el SDK de Android
         uses: android-actions/setup-android@v3
 
