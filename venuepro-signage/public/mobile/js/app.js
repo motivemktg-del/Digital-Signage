@@ -818,6 +818,7 @@ function deviceSheet() {
       <div class="dot" style="background:${STATUS_COLOR[status]}"></div>
       <div style="font:700 19px var(--sans);flex:1;min-width:0">${esc(d.name)}</div>
       <div class="row-tap" title="Quitar pantalla" style="width:30px;height:30px;border-radius:9px;flex:none;display:flex;align-items:center;justify-content:center;background:rgba(242,99,90,.12)" ${A('revoke', d.id)}>🗑️</div>
+      <div class="row-tap" title="Cerrar" style="width:30px;height:30px;border-radius:9px;flex:none;display:flex;align-items:center;justify-content:center;background:var(--card-2);font:600 14px var(--sans)" ${A('closeDevice')}>✕</div>
     </div>
     <div style="font:400 10.5px var(--mono);color:var(--ink-dimmer);margin-bottom:16px">${STATUS_LABEL[status]} · ${fmtTime(d.seen)}${d.error ? ' · ' + esc(d.error) : ''}</div>
     ${bigPreview(d)}
@@ -986,7 +987,10 @@ function playlistEditor(d) {
   return `<div class="backdrop" ${A('cancelPlaylist')}></div>
   <div class="sheet" style="max-height:90vh">
     <div class="sheet-grip"></div>
-    <div style="font:700 18px var(--sans);margin-bottom:14px">${d.id ? 'Editar lista' : 'Nueva lista'}</div>
+    <div class="row" style="margin-bottom:14px">
+      <div style="font:700 18px var(--sans);flex:1;min-width:0">${d.id ? 'Editar lista' : 'Nueva lista'}</div>
+      <div class="row-tap" title="Cerrar" style="width:30px;height:30px;border-radius:9px;flex:none;display:flex;align-items:center;justify-content:center;background:var(--card-2);font:600 14px var(--sans)" ${A('cancelPlaylist')}>✕</div>
+    </div>
     <input value="${esc(d.name)}" placeholder="Nombre de la lista" data-input="setDraftName" style="width:100%;box-sizing:border-box;padding:12px 14px;border-radius:12px;background:var(--card-2);border:1px solid var(--line);color:var(--ink);margin-bottom:14px">
     <div class="stack" style="margin-bottom:12px">
       ${d.items.map((it, idx) => {
@@ -1047,7 +1051,10 @@ function scheduleEditor(d) {
   return `<div class="backdrop" ${A('cancelSchedule')}></div>
   <div class="sheet" style="max-height:92vh">
     <div class="sheet-grip"></div>
-    <div style="font:700 18px var(--sans);margin-bottom:14px">${d.id ? 'Editar programa' : 'Nuevo programa'}</div>
+    <div class="row" style="margin-bottom:14px">
+      <div style="font:700 18px var(--sans);flex:1;min-width:0">${d.id ? 'Editar programa' : 'Nuevo programa'}</div>
+      <div class="row-tap" title="Cerrar" style="width:30px;height:30px;border-radius:9px;flex:none;display:flex;align-items:center;justify-content:center;background:var(--card-2);font:600 14px var(--sans)" ${A('cancelSchedule')}>✕</div>
+    </div>
     <form data-submit="saveScheduleDraft">
       <div class="stack">
         <input name="name" required value="${esc(d.name)}" placeholder="Nombre (ej. Menú del día)" style="padding:11px 13px;border-radius:10px;background:var(--card-2);border:1px solid var(--line);color:var(--ink)">
