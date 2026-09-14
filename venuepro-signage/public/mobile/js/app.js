@@ -1536,12 +1536,23 @@ function render() {
 // onerror="" inline a propósito — la CSP del backend (script-src 'self',
 // sin unsafe-inline) lo bloquearía; por eso se engancha acá, después de
 // cada render().
+//
+// Pero no todos los navegadores móviles disparan "error" cuando esto pasa
+// — Chrome/WebView en Android a veces se queda "cargando" un MP4 en vivo
+// sin duración fija para siempre (sobre todo en datos móviles, más lentos
+// que la red donde se probó) sin avisar con ningún evento — se ve
+// exactamente como un video pausado, aunque nunca estuvo en pausa de
+// verdad. Por eso, además del error explícito, si a los 4s no arrancó a
+// reproducir de verdad (sigue en pausa y en el segundo 0), lo tratamos
+// igual que un error y pasamos a la foto.
 let snapshotTimers = [];
 function wireLiveFeedFallbacks() {
   snapshotTimers.forEach(t => clearInterval(t));
   snapshotTimers = [];
   document.querySelectorAll('video[data-snapshot-src]').forEach(video => {
-    video.addEventListener('error', () => {
+    let swapped = false;
+    const toSnapshot = () => {
+      if (swapped) return; swapped = true;
       const img = document.createElement('img');
       img.setAttribute('style', video.getAttribute('style') || '');
       img.alt = 'señal en vivo';
@@ -1550,7 +1561,9 @@ function wireLiveFeedFallbacks() {
       refresh();
       snapshotTimers.push(setInterval(refresh, 1500));
       video.replaceWith(img);
-    }, { once: true });
+    };
+    video.addEventListener('error', toSnapshot, { once: true });
+    setTimeout(() => { if (video.isConnected && video.paused && video.currentTime === 0) toSnapshot(); }, 4000);
   });
 }
 
