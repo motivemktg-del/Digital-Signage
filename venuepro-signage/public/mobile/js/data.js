@@ -74,6 +74,28 @@ function deletePlaylist(id) { return api(`/api/playlists/${id}`, { method: 'DELE
 function saveSchedule(schedule) { return api('/api/schedules', { method: 'POST', body: schedule }); }
 function deleteSchedule(id) { return api(`/api/schedules/${id}`, { method: 'DELETE' }); }
 
+// ---- estudio IA (fondos generados con OpenAI, gpt-image-2) -----------------
+// Real de verdad — ver studio.js/STUDIO-IA.md. Solo funciona si el tenant
+// está vinculado a un CRM (kind='crm' en agency_links); si no, el backend
+// responde 403 y publicConfig().eligible viene en false.
+
+function getStudioConfig() { return api('/api/studio/config'); }
+function saveStudioConfig(payload) { return api('/api/studio/config', { method: 'POST', body: payload }); } // {apiKey?, enabled, monthlyLimit}
+function verifyStudio() { return api('/api/studio/verify', { method: 'POST' }); }
+function listStudioDrafts() { return api('/api/studio/drafts'); }
+function getStudioDraft(id) { return api(`/api/studio/drafts/${id}`); }
+function createStudioDraft(data) { return api('/api/studio/drafts', { method: 'POST', body: data }); }
+function updateStudioDraft(id, data, revision) { return api(`/api/studio/drafts/${id}`, { method: 'PUT', body: { data, revision } }); }
+function listStudioJobs() { return api('/api/studio/jobs'); }
+function generateStudioDraft(id, revision, requestId) { return api(`/api/studio/drafts/${id}/generate`, { method: 'POST', body: { confirmCost: true, requestId, revision } }); }
+function retryStudioSave(jobId) { return api(`/api/studio/jobs/${jobId}/retry-save`, { method: 'POST' }); }
+function exportStudioDraft(id, revision, pngBlob) {
+  return api(`/api/studio/drafts/${id}/export`, { method: 'POST', raw: true, body: pngBlob, headers: { 'Content-Type': 'image/png', 'x-studio-revision': String(revision) } });
+}
+
+const STUDIO_KIND_LABEL = { promotion: 'Promoción/ventas', menu: 'Menú', event: 'Evento', welcome: 'Bienvenida', cover: 'Portada' };
+const STUDIO_SIZE = { landscape: [1920, 1080], portrait: [1080, 1920], square: [1080, 1080] };
+
 // ---- equipo (usuarios del tenant) -------------------------------------------
 
 function listUsers() { return api('/api/users'); }

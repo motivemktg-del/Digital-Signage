@@ -11,6 +11,13 @@ const ui = {
   currentLocationId: null, // ubicación abierta en viewLocationDetail
   playlistDraft: null, // { id, name, items:[{asset,seconds}] } al crear/editar lista
   scheduleDraft: null, // objeto de horario al crear/editar
+  studioConfig: null,   // resultado de getStudioConfig(), null = sin cargar aún
+  studioDrafts: null,   // lista de borradores
+  studioDraftId: null,  // borrador abierto
+  studioDraft: null,    // { id, name, data, revision, created }
+  studioJob: null,      // job de generación en curso/último para este borrador
+  studioPolling: false,
+  studioConfigForm: null, // { apiKey:'', enabled, monthlyLimit } al editar la config
 };
 
 let remote = null; // último resultado de getState(): { tenant, role, email, locations, devices, assets, playlists, schedules }
@@ -83,6 +90,97 @@ const actions = {
   goLocations() { ui.route = 'locations'; render(); },
   onvifSoon() { showToast('Canal ONVIF: próximamente'); },
   openLocation(id) { ui.currentLocationId = id; ui.route = 'locationDetail'; render(); },
+
+  // -- estudio IA --
+  async goStudio() {
+    ui.route = 'studio'; render();
+    try { ui.studioConfig = await getStudioConfig(); } catch (e) { showToast(e.message, true); }
+    if (ui.studioConfig && ui.studioConfig.eligible) {
+      try { ui.studioDrafts = await listStudioDrafts(); } catch (e) { showToast(e.message, true); }
+    }
+    render();
+  },
+  editStudioConfig() {
+    const c = ui.studioConfig;
+    ui.studioConfigForm = { apiKey: '', enabled: !!c.enabled, monthlyLimit: c.monthlyLimit || 10 };
+    render();
+  },
+  cancelStudioConfig() { ui.studioConfigForm = null; render(); },
+  async saveStudioConfigNow(_, form) {
+    const f = form.closest('form');
+    const payload = { enabled: f.enabled.checked, monthlyLimit: Number(f.monthlyLimit.value) };
+    if (f.apiKey.value.trim()) payload.apiKey = f.apiKey.value.trim();
+    try {
+      ui.studioConfig = await saveStudioConfig(payload);
+      ui.studioConfigForm = null; showToast('Configuración guardada'); render();
+    } catch (e) { showToast(e.message, true); }
+  },
+  async verifyStudioNow() {
+    try { ui.studioConfig = await verifyStudio(); showToast('Acceso al modelo confirmado'); render(); }
+    catch (e) { showToast(e.message, true); }
+  },
+  async newStudioDraft() {
+    const name = prompt('Nombre del poster (ej. Promo viernes):'); if (!name) return;
+    try {
+      const created = await createStudioDraft({ name, kind: 'promotion', orientation: 'portrait', style: '', notes: '', layers: [] });
+      ui.studioDrafts = await listStudioDrafts();
+      actions.openStudioDraft(created.id);
+    } catch (e) { showToast(e.message, true); }
+  },
+  async openStudioDraft(id) {
+    ui.studioDraftId = id; ui.route = 'studioDraft'; ui.studioJob = null; render();
+    try { ui.studioDraft = await getStudioDraft(id); } catch (e) { showToast(e.message, true); }
+    render();
+  },
+  backToStudio() { ui.route = 'studio'; ui.studioDraft = null; ui.studioDraftId = null; render(); },
+  setDraftField(field, el) { ui.studioDraft.data[field] = el.value; },
+  setDraftKind(_, el) { ui.studioDraft.data.kind = el.value; render(); },
+  setDraftOrientation(_, el) { ui.studioDraft.data.orientation = el.value; render(); },
+  addTextLayer() {
+    ui.studioDraft.data.layers.push({ text: 'Texto', x: 10, y: 10, size: 48, color: '#ffffff' });
+    render();
+  },
+  removeTextLayer(idx) { ui.studioDraft.data.layers.splice(Number(idx), 1); render(); },
+  setLayerField(argStr, el) {
+    const [idx, field] = argStr.split(':');
+    const layer = ui.studioDraft.data.layers[Number(idx)];
+    layer[field] = (field === 'x' || field === 'y' || field === 'size') ? Number(el.value) : el.value;
+    drawStudioCanvas(); // repinta sin re-renderizar el HTML (no pierde el foco al escribir)
+  },
+  async saveStudioDraftNow() {
+    const d = ui.studioDraft;
+    try {
+      const saved = await updateStudioDraft(d.id, d.data, d.revision);
+      ui.studioDraft = saved; showToast('Borrador guardado');
+    } catch (e) { showToast(e.message, true); }
+    render();
+  },
+  async generateStudioNow() {
+    const d = ui.studioDraft;
+    if (!confirm(`Esto usa 1 de tus ${ui.studioConfig.monthlyLimit} solicitudes mensuales de tu cuenta de OpenAI. ¿Generar el fondo ahora?`)) return;
+    try {
+      await updateStudioDraft(d.id, d.data, d.revision).then(saved => ui.studioDraft = saved);
+      const requestId = crypto.randomUUID();
+      await generateStudioDraft(d.id, ui.studioDraft.revision, requestId);
+      showToast('Generando… puede tardar hasta un minuto');
+      pollStudioJob(requestId);
+    } catch (e) { showToast(e.message, true); }
+  },
+  async retryStudioSaveNow() {
+    if (!ui.studioJob) return;
+    try { await retryStudioSave(ui.studioJob.id); showToast('Reintentando guardado…'); pollStudioJob(ui.studioJob.id); }
+    catch (e) { showToast(e.message, true); }
+  },
+  async exportStudioNow() {
+    const canvas = document.getElementById('studio-canvas');
+    if (!canvas) return showToast('Genera el fondo primero', true);
+    canvas.toBlob(async blob => {
+      try {
+        await exportStudioDraft(ui.studioDraft.id, ui.studioDraft.revision, blob);
+        showToast('Guardado en tu biblioteca'); await refresh(); actions.backToStudio();
+      } catch (e) { showToast(e.message, true); }
+    }, 'image/png');
+  },
 
   // -- emparejar --
   // El código lo genera la PANTALLA (la TV/tablet llama a /api/pair/start
@@ -337,6 +435,21 @@ function deviceRow(d) {
   </div>`;
 }
 
+// Ventana grande de preview (detalle de pantalla) — hoy muestra el primer
+// archivo de la lista asignada; el día que exista una fuente en vivo (el
+// "Canal ONVIF" u otra señal externa), este mismo cuadro sería donde se
+// mostraría ese stream — es el hueco que se deja para eso.
+function bigPreview(d) {
+  const playlist = remote.playlists.find(p => p.id === d.playlist);
+  const asset = playlist && playlist.items[0] ? remote.assets.find(a => a.id === playlist.items[0].asset) : null;
+  const box = 'width:100%;aspect-ratio:9/16;max-height:340px;border-radius:14px;overflow:hidden;background:repeating-linear-gradient(135deg,#242830 0 7px,#1c1f25 7px 14px);display:flex;align-items:center;justify-content:center;margin-bottom:14px;position:relative';
+  if (!asset) return `<div style="${box}"><span style="font:500 10px var(--mono);color:var(--ink-faint)">sin contenido asignado</span></div>`;
+  const media = asset.type.startsWith('image/')
+    ? `<img src="${assetMediaUrl(asset.id)}" style="width:100%;height:100%;object-fit:cover">`
+    : `<video src="${assetMediaUrl(asset.id)}#t=0.5" preload="metadata" muted playsinline controls style="width:100%;height:100%;object-fit:cover"></video>`;
+  return `<div style="${box}">${media}</div>`;
+}
+
 function previewThumb(a) {
   const s = 'width:84px;aspect-ratio:16/9;border-radius:9px;object-fit:cover;flex:none;background:#000';
   return a.type.startsWith('image/')
@@ -356,6 +469,7 @@ function deviceSheet() {
       <div class="row-tap" title="Quitar pantalla" style="width:30px;height:30px;border-radius:9px;flex:none;display:flex;align-items:center;justify-content:center;background:rgba(242,99,90,.12)" ${A('revoke', d.id)}>🗑️</div>
     </div>
     <div style="font:400 10.5px var(--mono);color:var(--ink-dimmer);margin-bottom:16px">${STATUS_LABEL[status]} · ${fmtTime(d.seen)}${d.error ? ' · ' + esc(d.error) : ''}</div>
+    ${bigPreview(d)}
 
     <div class="eyebrow">Lista asignada</div>
     <div class="row" style="gap:8px;margin-bottom:16px">
@@ -460,6 +574,11 @@ function viewContent() {
         <div class="row-tap" style="flex:1;text-align:center;padding:12px 0;border-radius:14px;background:var(--card-2);border:1px solid var(--line);opacity:.5;font:600 12.5px var(--sans)" ${A('onvifSoon')}>+ Canal ONVIF</div>
       </div>
       <div style="font:400 10.5px var(--mono);color:var(--ink-faint);margin:-8px 0 14px">Canal ONVIF: próximamente — necesita cambios en el backend real y en el reproductor.</div>
+
+      <div class="row row-tap card-flat" style="padding:12px 13px;margin-bottom:20px" ${A('goStudio')}>
+        <div style="flex:1;min-width:0"><div style="font:600 12.5px var(--sans)">🎨 Estudio IA</div><div style="font:400 10.5px var(--mono);color:var(--ink-dimmer)">Generar un fondo de poster con OpenAI</div></div>
+        <div style="color:var(--ink-faint);font:400 13px var(--sans)">›</div>
+      </div>
       <div class="grid-2" style="margin-bottom:20px">
         ${remote.assets.length === 0 ? `<div style="grid-column:1/-1;padding:24px 0;text-align:center;color:var(--ink-faint);font:400 12px var(--sans)">Sin archivos todavía.</div>` : remote.assets.map(a => `
         <div class="card" style="overflow:hidden">
