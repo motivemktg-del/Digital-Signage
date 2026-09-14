@@ -56,15 +56,26 @@ public class MainActivity extends Activity {
  // liveSourceRtsp: la misma señal pero por RTSP (server.js la deriva sola
  // cuando puede) — se prioriza sobre liveSource porque no tiene el buffer
  // de varios segundos del MP4 progresivo.
- private volatile String liveSource="",liveSourceRtsp="";
+ // liveSourceWebrtc: la misma señal por WebRTC (WHEP contra go2rtc) — se
+ // prioriza SOBRE RTSP. A diferencia de RTSP, WebRTC puede pedirle un
+ // keyframe al encoder al conectarse (RTSP solo espera al próximo
+ // programado) — es el techo real de latencia que RTSP no puede bajar
+ // más (ver newLowLatencyPlayer() y issue androidx/media#1179, sin
+ // resolver). Si no logra conectar (ICE falla, sin ruta a esa LAN, etc.)
+ // cae solo a RTSP.
+ private volatile String liveSource="",liveSourceRtsp="",liveSourceWebrtc="";
  private String livePlayingUrl="";
+ private static org.webrtc.PeerConnectionFactory webrtcFactory;
+ private static org.webrtc.EglBase webrtcEglBase;
+ private org.webrtc.PeerConnection webrtcPc;
+ private org.webrtc.SurfaceViewRenderer webrtcRenderer;
  @Override public void onCreate(Bundle b){super.onCreate(b);
   getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
   getWindow().getDecorView().setSystemUiVisibility(View.SYSTEM_UI_FLAG_FULLSCREEN|View.SYSTEM_UI_FLAG_HIDE_NAVIGATION|View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY);
   root=new FrameLayout(this);root.setBackgroundColor(Color.BLACK);setContentView(root);root.setClipChildren(true);root.addOnLayoutChangeListener((v,l,t,r,bottom,ol,ot,or,ob)->{if(r-l!=or-ol||bottom-t!=ob-ot)layoutDisplay();});
   assets=new File(getFilesDir(),"media");assets.mkdirs();
   secret=getPreferences(0).getString("secret","");
-  try{current=new JSONObject(new String(new AtomicFile(new File(getFilesDir(),"manifest.json")).readFully(),StandardCharsets.UTF_8));version=current.getString("version");liveSource=current.optString("liveSource","");liveSourceRtsp=current.optString("liveSourceRtsp","");}catch(Exception ignored){}
+  try{current=new JSONObject(new String(new AtomicFile(new File(getFilesDir(),"manifest.json")).readFully(),StandardCharsets.UTF_8));version=current.getString("version");liveSource=current.optString("liveSource","");liveSourceRtsp=current.optString("liveSourceRtsp","");liveSourceWebrtc=current.optString("liveSourceWebrtc","");}catch(Exception ignored){}
   if(!liveSource.isEmpty())playLive(liveSource);else if(current!=null)playNext();else{String saved=getPreferences(0).getString("pairQr","");if(!saved.isEmpty()){try{byte[] bytes=Base64.decode(saved,Base64.DEFAULT);showPair(BitmapFactory.decodeByteArray(bytes,0,bytes.length),getPreferences(0).getString("pairCode",""));}catch(Exception ignored){message("VenuePro Signage\nConectando tu pantalla…");}}else message("VenuePro Signage\nConectando tu pantalla…");}
   network.scheduleWithFixedDelay(this::sync,0,20,TimeUnit.SECONDS);
  }
@@ -101,7 +112,7 @@ public class MainActivity extends Activity {
     // Keep the previous manifest active until every asset verifies successfully.
     AtomicFile file=new AtomicFile(new File(getFilesDir(),"manifest.json"));FileOutputStream out=null;
     try{out=file.startWrite();out.write(next.toString().getBytes(StandardCharsets.UTF_8));file.finishWrite(out);}catch(Exception e){if(out!=null)file.failWrite(out);throw e;}
-    current=next;version=next.getString("version");lastError="";liveSource=next.optString("liveSource","");liveSourceRtsp=next.optString("liveSourceRtsp","");
+    current=next;version=next.getString("version");lastError="";liveSource=next.optString("liveSource","");liveSourceRtsp=next.optString("liveSourceRtsp","");liveSourceWebrtc=next.optString("liveSourceWebrtc","");
     ui.post(()->{sequence="";layoutDisplay();
      if(!liveSource.isEmpty())playLive(liveSource);
      else if(next.optBoolean("paused"))stopPlayback();
@@ -141,13 +152,23 @@ public class MainActivity extends Activity {
   }
   return manifest.getJSONArray("items");
  }
- private void stopPlayback(){ui.removeCallbacks(advance);if(mediaPlayer!=null){mediaPlayer.release();mediaPlayer=null;}if(exoPlayer!=null){exoPlayer.release();exoPlayer=null;}video=null;canvas=null;videoWidth=0;videoHeight=0;if(photo!=null){photo.setImageDrawable(null);photo=null;}livePlayingUrl="";playing=false;root.removeAllViews();}
+ private void stopPlayback(){ui.removeCallbacks(advance);if(mediaPlayer!=null){mediaPlayer.release();mediaPlayer=null;}if(exoPlayer!=null){exoPlayer.release();exoPlayer=null;}if(webrtcPc!=null){webrtcPc.close();webrtcPc=null;}if(webrtcRenderer!=null){webrtcRenderer.release();webrtcRenderer=null;}video=null;canvas=null;videoWidth=0;videoHeight=0;if(photo!=null){photo.setImageDrawable(null);photo=null;}livePlayingUrl="";playing=false;root.removeAllViews();}
+ // Si el manifiesto trae liveSourceWebrtc, se intenta ESA primero — WebRTC
+ // puede pedirle un keyframe al encoder al conectarse, cosa que RTSP no
+ // puede hacer (solo espera al próximo programado). Si no logra conectar
+ // (ICE falla, sin ruta a esa LAN, etc.) cae solo a RTSP; si tampoco hay
+ // RTSP derivable, cae al MediaPlayer+MP4 de siempre (playLiveFallback).
+ private void playLive(String url){
+  if(destroyed||paused)return;
+  if(!liveSourceWebrtc.isEmpty()){playLiveWebrtc(liveSourceWebrtc,()->playLiveFallback(url));return;}
+  playLiveFallback(url);
+ }
  // Si el manifiesto trae liveSourceRtsp (go2rtc), se usa ESA — RTSP no
  // tiene el buffer de varios segundos del MP4 progresivo (el que usa el
  // proxy del panel web, pensado para navegadores que no pueden abrir
  // RTSP directo). Si no hay RTSP derivable (fuente en vivo genérica, no
  // go2rtc), cae al MediaPlayer+MP4 de siempre.
- private void playLive(String url){
+ private void playLiveFallback(String url){
   if(destroyed||paused)return;
   if(!liveSourceRtsp.isEmpty()){playLiveRtsp(liveSourceRtsp);return;}
   if(url.equals(livePlayingUrl))return; // ya está en esa URL
@@ -172,6 +193,98 @@ public class MainActivity extends Activity {
    public void onSurfaceTextureUpdated(SurfaceTexture texture){}
   });
  }
+ // SdpObserver con métodos vacíos — la interfaz de WebRTC exige los 4,
+ // pero la mayoría de las veces solo hace falta reaccionar a uno.
+ private static class SimpleSdpObserver implements org.webrtc.SdpObserver {
+  public void onCreateSuccess(org.webrtc.SessionDescription sdp){}
+  public void onSetSuccess(){}
+  public void onCreateFailure(String error){}
+  public void onSetFailure(String error){}
+ }
+ // PeerConnectionFactory es caro de crear (inicializa el motor nativo de
+ // WebRTC) — se hace una sola vez por proceso, no por cada vez que se
+ // prende un canal.
+ private static synchronized void ensureWebrtcFactory(android.content.Context context){
+  if(webrtcFactory!=null)return;
+  org.webrtc.PeerConnectionFactory.initialize(org.webrtc.PeerConnectionFactory.InitializationOptions.builder(context).createInitializationOptions());
+  webrtcEglBase=org.webrtc.EglBase.create();
+  webrtcFactory=org.webrtc.PeerConnectionFactory.builder()
+   .setVideoDecoderFactory(new org.webrtc.DefaultVideoDecoderFactory(webrtcEglBase.getEglBaseContext()))
+   .setVideoEncoderFactory(new org.webrtc.DefaultVideoEncoderFactory(webrtcEglBase.getEglBaseContext(),true,true))
+   .createPeerConnectionFactory();
+ }
+ // WebRTC directo contra go2rtc (WHEP: se manda la oferta SDP por POST, se
+ // recibe la respuesta) — sin servidores STUN/TURN a propósito, porque el
+ // reproductor y go2rtc están en la MISMA LAN (no hay NAT que atravesar
+ // entre ellos). Si en 4s no logra conectar de verdad (no solo que la
+ // señalización funcionó — hay que esperar a que ICE conecte, que es
+ // cuando el video ya está fluyendo), se abandona y se llama a
+ // "fallback" (normalmente playLiveRtsp). Es lo mismo que ya hace la
+ // vista previa del panel web, solo que en Java en vez de JavaScript.
+ private void playLiveWebrtc(String webrtcUrl,Runnable fallback){
+  if(destroyed||paused)return;
+  if(webrtcUrl.equals(livePlayingUrl))return; // ya está en esa URL
+  stopPlayback();
+  livePlayingUrl=webrtcUrl;playing=true;
+  ensureWebrtcFactory(getApplicationContext());
+  canvas=new FrameLayout(this);canvas.setClipChildren(true);root.addView(canvas);layoutDisplay();
+  webrtcRenderer=new org.webrtc.SurfaceViewRenderer(this);
+  webrtcRenderer.init(webrtcEglBase.getEglBaseContext(),null);
+  canvas.addView(webrtcRenderer,new FrameLayout.LayoutParams(-1,-1,Gravity.CENTER));
+  layoutDisplay(); // fija el scalingType (cover/contain) del renderer recién creado
+  final boolean[] gaveUp={false};
+  final Runnable giveUp=()->ui.post(()->{
+   if(gaveUp[0]||!webrtcUrl.equals(livePlayingUrl))return; gaveUp[0]=true;
+   livePlayingUrl="";lastError="WebRTC no logró conectar, usando RTSP…";fallback.run();
+  });
+  final org.webrtc.PeerConnection[] pcHolder=new org.webrtc.PeerConnection[1];
+  org.webrtc.PeerConnection pc=webrtcFactory.createPeerConnection(new org.webrtc.PeerConnection.RTCConfiguration(new ArrayList<>()),new org.webrtc.PeerConnection.Observer(){
+   @Override public void onSignalingChange(org.webrtc.PeerConnection.SignalingState s){}
+   @Override public void onIceConnectionChange(org.webrtc.PeerConnection.IceConnectionState s){
+    if(s==org.webrtc.PeerConnection.IceConnectionState.FAILED||s==org.webrtc.PeerConnection.IceConnectionState.DISCONNECTED||s==org.webrtc.PeerConnection.IceConnectionState.CLOSED)giveUp.run();
+   }
+   @Override public void onIceConnectionReceivingChange(boolean receiving){}
+   @Override public void onIceGatheringChange(org.webrtc.PeerConnection.IceGatheringState s){}
+   @Override public void onIceCandidate(org.webrtc.IceCandidate candidate){}
+   @Override public void onIceCandidatesRemoved(org.webrtc.IceCandidate[] candidates){}
+   @Override public void onAddStream(org.webrtc.MediaStream stream){}
+   @Override public void onRemoveStream(org.webrtc.MediaStream stream){}
+   @Override public void onDataChannel(org.webrtc.DataChannel channel){}
+   @Override public void onRenegotiationNeeded(){}
+   @Override public void onAddTrack(org.webrtc.RtpReceiver receiver,org.webrtc.MediaStream[] streams){
+    org.webrtc.MediaStreamTrack track=receiver.track();
+    if(track instanceof org.webrtc.VideoTrack){
+     org.webrtc.VideoTrack videoTrack=(org.webrtc.VideoTrack)track;
+     ui.post(()->{if(pcHolder[0]==webrtcPc&&webrtcRenderer!=null)videoTrack.addSink(webrtcRenderer);});
+    }
+   }
+  });
+  pcHolder[0]=pc;webrtcPc=pc;
+  if(pc==null){giveUp.run();return;}
+  pc.addTransceiver(org.webrtc.MediaStreamTrack.MediaType.MEDIA_TYPE_VIDEO,new org.webrtc.RtpTransceiver.RtpTransceiverInit(org.webrtc.RtpTransceiver.RtpTransceiverDirection.RECV_ONLY));
+  pc.createOffer(new SimpleSdpObserver(){
+   @Override public void onCreateSuccess(org.webrtc.SessionDescription offer){
+    pc.setLocalDescription(new SimpleSdpObserver(),offer);
+    network.execute(()->{
+     try{
+      HttpURLConnection c=(HttpURLConnection)new URL(webrtcUrl).openConnection();
+      c.setConnectTimeout(4000);c.setReadTimeout(4000);c.setRequestMethod("POST");c.setDoOutput(true);
+      c.setRequestProperty("Content-Type","application/sdp");
+      try(OutputStream out=c.getOutputStream()){out.write(offer.description.getBytes(StandardCharsets.UTF_8));}
+      int code=c.getResponseCode();
+      if(code<200||code>=300)throw new IOException("go2rtc respondió "+code);
+      String answerSdp=new String(read(c.getInputStream(),65536),StandardCharsets.UTF_8);
+      c.disconnect();
+      ui.post(()->{if(pcHolder[0]==webrtcPc)pc.setRemoteDescription(new SimpleSdpObserver(),new org.webrtc.SessionDescription(org.webrtc.SessionDescription.Type.ANSWER,answerSdp));});
+     }catch(Exception e){giveUp.run();}
+    });
+   }
+   @Override public void onCreateFailure(String error){giveUp.run();}
+  },new org.webrtc.MediaConstraints());
+  ui.postDelayed(()->{
+   if(pcHolder[0]==webrtcPc&&pc.iceConnectionState()!=org.webrtc.PeerConnection.IceConnectionState.CONNECTED&&pc.iceConnectionState()!=org.webrtc.PeerConnection.IceConnectionState.COMPLETED)giveUp.run();
+  },4000);
+ }
  // ExoPlayer sobre RTSP-TCP (más confiable detrás de NAT/firewall que UDP,
  // el costo de latencia es mínimo) — esto sí es tiempo casi real.
  //
@@ -184,14 +297,15 @@ public class MainActivity extends Activity {
  // esperada) — un buffer pequeño + LiveConfiguration con target bajo le
  // dice al reproductor "quédate pegado al borde en vivo, no acumules".
  //
- // OJO: si aun así se sigue viendo con 2-3s de atraso, revisa el "-g" del
- // comando ffmpeg que arma la señal en go2rtc (el que captura la
- // capturadora) — un GOP grande (ej. -g 50 a ~15-25fps = 2-3s entre
- // keyframes) obliga a esperar el próximo keyframe para poder decodificar
- // limpio, y NINGÚN ajuste de acá (el reproductor) puede evitar esa
- // espera — eso se arregla bajando el "-g" en la config de ese stream en
- // go2rtc (Home Assistant → add-on de go2rtc → su configuración), no en
- // esta app.
+ // OJO: bajar el "-g" del ffmpeg que arma la señal en go2rtc (menos
+ // cuadros entre keyframes) SÍ ayuda un poco, pero media3/ExoPlayer tiene
+ // un límite propio de latencia en su implementación de RTSP que ningún
+ // ajuste de acá puede bajar más — issue abierto y sin resolver del
+ // propio proyecto: https://github.com/androidx/media/issues/1179 (otro
+ // desarrollador reporta el mismo síntoma, "2-3s de atraso", con los
+ // mismos intentos de buffer mínimo, sin solución). Por eso WebRTC
+ // (playLiveWebrtc, más abajo) se intenta SIEMPRE primero cuando el
+ // manifiesto lo trae — este método (RTSP) queda como respaldo.
  private androidx.media3.exoplayer.ExoPlayer newLowLatencyPlayer(){
   androidx.media3.exoplayer.DefaultLoadControl loadControl=new androidx.media3.exoplayer.DefaultLoadControl.Builder()
    .setBufferDurationsMs(500,2000,250,250).build();
@@ -312,6 +426,9 @@ public class MainActivity extends Activity {
   boolean cover=settings==null||!settings.optString("fit","cover").equals("contain");
   if(photo!=null)photo.setScaleType(cover?ImageView.ScaleType.CENTER_CROP:ImageView.ScaleType.FIT_CENTER);
   if(video!=null&&videoWidth>0&&videoHeight>0){double scale=cover?Math.max((double)w/videoWidth,(double)h/videoHeight):Math.min((double)w/videoWidth,(double)h/videoHeight);video.setLayoutParams(new FrameLayout.LayoutParams((int)Math.round(videoWidth*scale),(int)Math.round(videoHeight*scale),Gravity.CENTER));}
+  // SurfaceViewRenderer (WebRTC) resuelve su propio recorte/ajuste — no
+  // hace falta calcularle el tamaño a mano como al TextureView de arriba.
+  if(webrtcRenderer!=null)webrtcRenderer.setScalingType(cover?org.webrtc.RendererCommon.ScalingType.SCALE_ASPECT_FILL:org.webrtc.RendererCommon.ScalingType.SCALE_ASPECT_FIT);
  }
  private void message(String text){root.removeAllViews();TextView t=new TextView(this);t.setText(text);t.setTextColor(Color.rgb(177,237,137));t.setTextSize(24);t.setGravity(Gravity.CENTER);t.setPadding(24,24,24,24);root.addView(t,new FrameLayout.LayoutParams(-1,-1));}
  private void showPair(Bitmap qr,String code){if(current!=null)return;root.removeAllViews();LinearLayout box=new LinearLayout(this);box.setOrientation(LinearLayout.VERTICAL);box.setGravity(Gravity.CENTER);root.addView(box,new FrameLayout.LayoutParams(-1,-1));TextView title=new TextView(this);title.setText("VenuePro Signage\nEscanea desde el administrador");title.setTextSize(22);title.setGravity(Gravity.CENTER);title.setTextColor(Color.WHITE);box.addView(title);ImageView image=new ImageView(this);image.setImageBitmap(qr);int size=Math.min(getResources().getDisplayMetrics().widthPixels,getResources().getDisplayMetrics().heightPixels)/2;LinearLayout.LayoutParams lp=new LinearLayout.LayoutParams(size,size);lp.setMargins(0,18,0,18);box.addView(image,lp);TextView label=new TextView(this);label.setText(code+"\nCódigo válido por 10 minutos");label.setTextSize(20);label.setGravity(Gravity.CENTER);label.setTextColor(Color.rgb(177,237,137));box.addView(label);Button setup=new Button(this);setup.setText("Configurar inicio automático");setup.setOnClickListener(v->startupSettings());box.addView(setup);}

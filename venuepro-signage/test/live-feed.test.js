@@ -92,6 +92,7 @@ test('Proxy de video en vivo (/live-feed): mismo origen, sin exponer la URL de l
     const dev = db.prepare('SELECT * FROM devices WHERE id=?').get(deviceId);
     const manifest = deviceManifest(db, dev, 'http://localhost:3080');
     assert.equal(manifest.liveSourceRtsp, 'rtsp://127.0.0.1:8554/mivideo'); // 8554 = puerto RTSP fijo de go2rtc, no el de la API
+    assert.equal(manifest.liveSourceWebrtc, `http://127.0.0.1:${go2rtc.address().port}/api/webrtc?src=mivideo`); // WHEP — la app lo intenta ANTES que RTSP
     go2rtc.close();
 
     // Si la cámara está caída, el proxy responde 502 (no cuelga ni revienta)

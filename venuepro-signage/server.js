@@ -43,7 +43,7 @@ export function deviceManifest(db, d, origin) {
  const schedules=db.prepare('SELECT * FROM schedules WHERE device=? AND tenant=? ORDER BY priority DESC,id ASC').all(d.id,d.tenant).map(s=>({id:s.id,name:s.name,timezone:s.timezone,days:JSON.parse(s.days),start:s.start,end:s.end,fromDate:s.fromDate,toDate:s.toDate,priority:s.priority,items:expand(s.playlist)}));
  const assetUrl=id=>{const a=id&&db.prepare('SELECT * FROM assets WHERE id=? AND tenant=?').get(id,d.tenant);return a?origin+'/api/player/media/'+a.id:null;};
  const mixOut=()=>{if(!d.mix)return null;const m=JSON.parse(d.mix);return {...m,promoUrl:assetUrl(m.promo),logoUrl:assetUrl(m.logo)};};
- const payload={paired:true,name:d.name,paused:!!d.paused,revision:d.revision||0,display:{orientation:d.orientation||'auto',rotation:d.rotation||0,fit:d.fit||'cover'},liveSource:d.live_source||null,liveSourceRtsp:d.live_source?deriveRtspUrl(d.live_source):null,mix:mixOut(),items:expand(d.playlist),schedules};return {...payload,version:hash(JSON.stringify(payload))};
+ const payload={paired:true,name:d.name,paused:!!d.paused,revision:d.revision||0,display:{orientation:d.orientation||'auto',rotation:d.rotation||0,fit:d.fit||'cover'},liveSource:d.live_source||null,liveSourceRtsp:d.live_source?deriveRtspUrl(d.live_source):null,liveSourceWebrtc:d.live_source?deriveWebrtcUrl(d.live_source):null,mix:mixOut(),items:expand(d.playlist),schedules};return {...payload,version:hash(JSON.stringify(payload))};
 }
 // Trae una URL de video (MJPEG/MP4 — cualquier respuesta HTTP simple, sin
 // sub-recursos ni WebSocket) y la repite tal cual al navegador, como si
