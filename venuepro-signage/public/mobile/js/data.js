@@ -83,14 +83,15 @@ function listAssetFolders() { return api('/api/asset-folders'); }
 function createAssetFolder(name) { return api('/api/asset-folders', { method: 'POST', body: { name } }); }
 function deleteAssetFolder(id) { return api(`/api/asset-folders/${id}`, { method: 'DELETE' }); }
 function listChannels() { return api('/api/channels'); }
-function createChannel(payload) { return api('/api/channels', { method: 'POST', body: payload } ); } // {name, location, url}
+function createChannel(payload) { return api('/api/channels', { method: 'POST', body: payload } ); } // {name, url, location?}
 function deleteChannel(id) { return api(`/api/channels/${id}`, { method: 'DELETE' }); }
+function channelLiveFeedUrl(id, mode) { return `/api/channels/${id}/live-feed${mode ? `?mode=${mode}` : ''}`; }
 function setAssetFolder(assetId, folder) { return api(`/api/assets/${assetId}/folder`, { method: 'POST', body: { folder } }); } // folder:null lo saca de la carpeta
 function assetMediaUrl(id) { return `/api/assets/${id}/media`; } // <img>/<video> same-origin, manda cookie sola
 
 // ---- listas de reproducción -----------------------------------------------
 
-function savePlaylist(playlist) { return api('/api/playlists', { method: 'POST', body: playlist }); } // {id?,name,items:[{asset,seconds}]}
+function savePlaylist(playlist) { return api('/api/playlists', { method: 'POST', body: playlist }); } // {id?,name,items:[{asset,seconds}|{channel,seconds}]}
 function addAssetToPlaylist(playlistId, asset) { return api(`/api/playlists/${playlistId}/assets`, { method: 'POST', body: { asset } }); }
 function deletePlaylist(id) { return api(`/api/playlists/${id}`, { method: 'DELETE' }); }
 

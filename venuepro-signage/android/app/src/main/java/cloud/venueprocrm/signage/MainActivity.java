@@ -113,7 +113,11 @@ public class MainActivity extends Activity {
    ui.post(()->{stopPlayback();message("Pantalla desvinculada\nGenerando un nuevo código…");});
   }catch(Exception e){lastError=e.getMessage()==null?"Error de sincronización":e.getMessage();if(current==null)ui.post(()->{if(!playing)message("No se pudo conectar\nSe intentará de nuevo automáticamente");});try{if(!secret.isEmpty())request("/api/player/heartbeat",new JSONObject().put("version",version).put("error",lastError));}catch(Exception ignored){}}
  }
- private void collect(JSONArray list,Map<String,JSONObject> out)throws JSONException{for(int i=0;i<list.length();i++){JSONObject item=list.getJSONObject(i);out.put(item.getString("sha"),item);}}
+ // Un item de tipo "live" (canal embebido en una lista, ver
+ // deviceManifest()/expand() en server.js) no es un archivo que se
+ // descargue y cachee por sha — se transmite en vivo cuando le toca su
+ // turno, así que no entra al mapa de descargas.
+ private void collect(JSONArray list,Map<String,JSONObject> out)throws JSONException{for(int i=0;i<list.length();i++){JSONObject item=list.getJSONObject(i);if("live".equals(item.optString("type","")))continue;out.put(item.getString("sha"),item);}}
  private void download(JSONObject item)throws Exception{
   String sha=item.getString("sha");if(!sha.matches("[a-f0-9]{64}"))throw new IOException("Archivo inválido");
   File target=new File(assets,sha);long expected=item.getLong("size");if(target.exists()&&target.length()==expected&&checksum(target).equals(sha))return;
@@ -202,7 +206,13 @@ public class MainActivity extends Activity {
    if(manifest.optBoolean("paused")){message("Reproducción pausada\nReanuda desde el gestor");ui.postDelayed(advance,10000);return;}
    JSONArray list=selected(manifest);String key=list.toString();if(!key.equals(sequence)){sequence=key;index=0;}
    if(list.length()==0){message("Pantalla vinculada\nEsperando contenido programado");ui.postDelayed(advance,10000);return;}
-   JSONObject item=list.getJSONObject(index++%list.length());File file=new File(assets,item.getString("sha"));playing=true;canvas=new FrameLayout(this);canvas.setClipChildren(true);root.addView(canvas);layoutDisplay();
+   JSONObject item=list.getJSONObject(index++%list.length());
+   // Un item de tipo "live" es un canal metido dentro de la lista (no la
+   // fuente en vivo persistente de la pantalla, esa es liveSource/playLive
+   // más arriba) — se transmite en su turno y avanza solo tras "seconds",
+   // igual que una foto, en vez de completarse solo como un video normal.
+   if("live".equals(item.optString("type",""))){playRotationLive(item);return;}
+   File file=new File(assets,item.getString("sha"));playing=true;canvas=new FrameLayout(this);canvas.setClipChildren(true);root.addView(canvas);layoutDisplay();
    if(item.getString("type").startsWith("video/")){
     video=new TextureView(this);canvas.addView(video,new FrameLayout.LayoutParams(-1,-1,Gravity.CENTER));
     video.setSurfaceTextureListener(new TextureView.SurfaceTextureListener(){
@@ -222,6 +232,48 @@ public class MainActivity extends Activity {
     Bitmap bitmap=BitmapFactory.decodeFile(file.getAbsolutePath(),opts);if(bitmap==null)throw new IOException("Imagen no compatible");photo=new ImageView(this);photo.setScaleType(ImageView.ScaleType.CENTER_CROP);photo.setImageBitmap(bitmap);canvas.addView(photo,new FrameLayout.LayoutParams(-1,-1));layoutDisplay();ui.postDelayed(advance,item.getInt("seconds")*1000L);
    }
   }catch(Exception e){lastError="No se pudo reproducir el archivo";ui.postDelayed(advance,3000);}
+ }
+ // Canal embebido en una lista: se reproduce igual que un video/foto de
+ // la rotación, solo que en vivo (RTSP si go2rtc lo permite, si no MP4
+ // por HTTP) y avanzando al siguiente item pasados los "seconds"
+ // configurados en vez de esperar a que "termine" (un stream no termina
+ // solo). Distinto de liveSource/playLive/playLiveRtsp — esos son la
+ // fuente en vivo PERSISTENTE de la pantalla (sin "seconds", sin avanzar).
+ @androidx.media3.common.util.UnstableApi
+ private void playRotationLive(JSONObject item){
+  playing=true;canvas=new FrameLayout(this);canvas.setClipChildren(true);root.addView(canvas);layoutDisplay();
+  video=new TextureView(this);canvas.addView(video,new FrameLayout.LayoutParams(-1,-1,Gravity.CENTER));
+  long millis=Math.max(1,item.optInt("seconds",10))*1000L;
+  String rtsp=item.optString("rtsp","");
+  if(!rtsp.isEmpty()){
+   final androidx.media3.exoplayer.ExoPlayer player=new androidx.media3.exoplayer.ExoPlayer.Builder(this).build();
+   exoPlayer=player;player.setVideoTextureView(video);
+   androidx.media3.exoplayer.source.MediaSource source=new androidx.media3.exoplayer.rtsp.RtspMediaSource.Factory().setForceUseRtpTcp(true).createMediaSource(androidx.media3.common.MediaItem.fromUri(rtsp));
+   player.setMediaSource(source);
+   player.addListener(new androidx.media3.common.Player.Listener(){
+    @Override public void onVideoSizeChanged(androidx.media3.common.VideoSize size){videoWidth=size.width;videoHeight=size.height;layoutDisplay();}
+    @Override public void onPlayerError(androidx.media3.common.PlaybackException error){if(player!=exoPlayer)return;lastError="Canal no disponible, saltando…";ui.removeCallbacks(advance);ui.postDelayed(advance,1500);}
+   });
+   player.setPlayWhenReady(true);player.prepare();
+   ui.postDelayed(advance,millis);
+   return;
+  }
+  try{String url=item.getString("url");
+   video.setSurfaceTextureListener(new TextureView.SurfaceTextureListener(){
+    public void onSurfaceTextureAvailable(SurfaceTexture texture,int width,int height){
+     try{final MediaPlayer player=new MediaPlayer();mediaPlayer=player;Surface surface=new Surface(texture);player.setSurface(surface);surface.release();player.setDataSource(url);
+      player.setOnPreparedListener(mp->{if(mp!=mediaPlayer)return;videoWidth=mp.getVideoWidth();videoHeight=mp.getVideoHeight();layoutDisplay();mp.start();});
+      player.setOnVideoSizeChangedListener((mp,w,h)->{videoWidth=w;videoHeight=h;layoutDisplay();});
+      player.setOnErrorListener((mp,what,extra)->{lastError="Canal no disponible, saltando…";ui.removeCallbacks(advance);ui.postDelayed(advance,1500);return true;});
+      player.prepareAsync();
+     }catch(Exception error){lastError="No se pudo abrir el canal";ui.removeCallbacks(advance);ui.postDelayed(advance,1500);}
+    }
+    public void onSurfaceTextureSizeChanged(SurfaceTexture texture,int width,int height){}
+    public boolean onSurfaceTextureDestroyed(SurfaceTexture texture){return true;}
+    public void onSurfaceTextureUpdated(SurfaceTexture texture){}
+   });
+   ui.postDelayed(advance,millis);
+  }catch(Exception e){lastError="No se pudo abrir el canal";ui.postDelayed(advance,1500);}
  }
  private void layoutDisplay(){
   if(canvas==null||current==null)return;

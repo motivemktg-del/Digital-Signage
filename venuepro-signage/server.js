@@ -32,7 +32,14 @@ function deriveRtspUrl(url) {
  } catch { return null; }
 }
 export function deviceManifest(db, d, origin) {
- const expand=id=>{const p=db.prepare('SELECT * FROM playlists WHERE id=? AND tenant=?').get(id,d.tenant);return p?JSON.parse(p.items).map(item=>{const a=db.prepare('SELECT * FROM assets WHERE id=? AND tenant=?').get(item.asset,d.tenant);return {id:a.id,sha:a.sha,size:a.size,type:a.type,seconds:item.seconds,url:origin+'/api/player/media/'+a.id};}):[];};
+ // Un item de lista es un archivo (item.asset) O un canal en vivo
+ // (item.channel) — el canal manda su URL tal cual (más la de RTSP
+ // derivada, para el reproductor Android) en vez de una URL de archivo
+ // proxeada, porque no es un archivo que el VPS tenga guardado.
+ const expand=id=>{const p=db.prepare('SELECT * FROM playlists WHERE id=? AND tenant=?').get(id,d.tenant);return p?JSON.parse(p.items).map(item=>{
+  if(item.channel){const c=db.prepare('SELECT * FROM channels WHERE id=? AND tenant=?').get(item.channel,d.tenant);return c?{id:c.id,type:'live',seconds:item.seconds,url:c.url,rtsp:deriveRtspUrl(c.url)}:null;}
+  const a=db.prepare('SELECT * FROM assets WHERE id=? AND tenant=?').get(item.asset,d.tenant);return a?{id:a.id,sha:a.sha,size:a.size,type:a.type,seconds:item.seconds,url:origin+'/api/player/media/'+a.id}:null;
+ }).filter(Boolean):[];};
  const schedules=db.prepare('SELECT * FROM schedules WHERE device=? AND tenant=? ORDER BY priority DESC,id ASC').all(d.id,d.tenant).map(s=>({id:s.id,name:s.name,timezone:s.timezone,days:JSON.parse(s.days),start:s.start,end:s.end,fromDate:s.fromDate,toDate:s.toDate,priority:s.priority,items:expand(s.playlist)}));
  const assetUrl=id=>{const a=id&&db.prepare('SELECT * FROM assets WHERE id=? AND tenant=?').get(id,d.tenant);return a?origin+'/api/player/media/'+a.id:null;};
  const mixOut=()=>{if(!d.mix)return null;const m=JSON.parse(d.mix);return {...m,promoUrl:assetUrl(m.promo),logoUrl:assetUrl(m.logo)};};
@@ -259,9 +266,24 @@ export function createApp(env = process.env, studioOptions = {}) {
   res.status(201).json({id});
  })));
  app.delete('/api/channels/:id',admin,wrap(managed('channel.delete',async(req,res)=>{
+  // A diferencia de la fuente en vivo de una pantalla (que copia la URL,
+  // así que borrar el canal no la rompe), una lista guarda el ID del
+  // canal y lo resuelve al vuelo — si se borra, esa lista quedaría con
+  // un hueco. Igual que con un archivo en uso: hay que sacarlo primero.
+  const used=db.prepare('SELECT items FROM playlists WHERE tenant=?').all(req.user.tenant).some(p=>JSON.parse(p.items).some(i=>i.channel===req.params.id));
+  if(used)throw fail(409,'El canal está en una lista. Quítalo de esa lista antes de eliminarlo.');
   if(!db.prepare('DELETE FROM channels WHERE id=? AND tenant=?').run(req.params.id,req.user.tenant).changes)throw fail(404,'Canal no encontrado.');
   res.json({ok:true});
  })));
+ // Vista previa de un canal DESDE Contenido (cuando es un item de lista,
+ // no la fuente en vivo de una pantalla) — mismo proxy, misma razón
+ // (contenido mixto + CSP), solo que la URL sale de channels en vez de
+ // devices.live_source.
+ app.get('/api/channels/:id/live-feed',admin,wrap(async(req,res)=>{
+  const c=db.prepare('SELECT url FROM channels WHERE id=? AND tenant=?').get(req.params.id,req.user.tenant);
+  if(!c)throw fail(404,'Canal no encontrado.');
+  await proxyLiveFeed(req.query.mode==='snapshot'?deriveSnapshotUrl(c.url):c.url,req,res);
+ }));
  app.post('/api/pair/start',limit('pair-start',20),wrap(async(req,res)=>{
   db.prepare('DELETE FROM devices WHERE tenant IS NULL AND expires<?').run(Date.now());
   const id=randomUUID(),secret=token(),code=token().slice(0,12).toUpperCase();
@@ -370,10 +392,17 @@ export function createApp(env = process.env, studioOptions = {}) {
  }));
  app.post('/api/playlists',admin,wrap(managed('playlist.save',async(req,res)=>{
   const name=nameOf(req.body.name),items=req.body.items;
-  if(!Array.isArray(items)||!items.length||items.length>200) throw fail(400,'Agrega entre 1 y 200 archivos.');
+  if(!Array.isArray(items)||!items.length||items.length>200) throw fail(400,'Agrega entre 1 y 200 archivos o canales.');
+  // Un item puede ser un archivo (item.asset) o un canal en vivo
+  // (item.channel) — así una lista puede rotar entre contenido grabado
+  // y una señal en vivo (ej. la cámara del salón) igual que con archivos.
   const clean=items.map(item=>{
-   if(!item||typeof item.asset!=='string'||!Number.isInteger(item.seconds)||item.seconds<1||item.seconds>3600) throw fail(400,'Duración inválida (1–3600 segundos).');
-   if(!db.prepare('SELECT 1 FROM assets WHERE id=? AND tenant=? AND archived=0').get(item.asset,req.user.tenant))throw fail(400,'Archivo no disponible.');
+   if(!item||!Number.isInteger(item.seconds)||item.seconds<1||item.seconds>3600) throw fail(400,'Duración inválida (1–3600 segundos).');
+   if(typeof item.channel==='string'){
+    if(!db.prepare('SELECT 1 FROM channels WHERE id=? AND tenant=?').get(item.channel,req.user.tenant))throw fail(400,'Canal no disponible.');
+    return {channel:item.channel,seconds:item.seconds};
+   }
+   if(typeof item.asset!=='string'||!db.prepare('SELECT 1 FROM assets WHERE id=? AND tenant=? AND archived=0').get(item.asset,req.user.tenant))throw fail(400,'Archivo no disponible.');
    return {asset:item.asset,seconds:item.seconds};
   });
   const id=req.body.id||randomUUID(),version=randomUUID();
