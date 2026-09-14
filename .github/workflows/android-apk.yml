@@ -34,19 +34,36 @@ jobs:
           distribution: temurin
           java-version: '17'
 
-      # El runner de GitHub NO trae sdkmanager en el PATH por defecto (el
-      # SDK preinstalado varía por imagen) — esta acción sí lo deja listo
-      # y acepta las licencias sola. Falló varias veces seguidas el
-      # 2026-09-14 (~21:03-21:07 UTC), incluso en runners nuevos recién
-      # levantados — así que reintentar DENTRO del mismo job (como se
-      # probó primero) no ayuda, es algo externo (descarga de Google o el
-      # propio runner) que necesita que pase el tiempo, no más intentos
-      # seguidos en la misma corrida.
-      - name: Configurar el SDK de Android
+      # Las imágenes ubuntu-latest de GitHub YA traen un SDK de Android
+      # instalado de fábrica (ANDROID_HOME=/usr/local/lib/android/sdk,
+      # normalmente con platforms/build-tools recientes) — justo para no
+      # depender de bajar nada. android-actions/setup-android@v3 (lo que
+      # se usaba acá) empezó a fallar solo el 2026-09-14 (~21:03 UTC en
+      # adelante), incluso en runners nuevos y con reintentos — algo
+      # externo (su propia descarga), no el código. Usar directo lo que
+      # ya trae el runner evita depender de esa descarga por completo; si
+      # algún día el runner NO lo trae, cae de vuelta a la acción vieja.
+      - name: Verificar si el SDK de Android ya viene en el runner
+        id: sdk_check
+        run: |
+          echo "ANDROID_HOME=$ANDROID_HOME"
+          ls -la "$ANDROID_HOME" 2>&1 || true
+          if [ -d "$ANDROID_HOME/cmdline-tools" ]; then
+            echo "$ANDROID_HOME/cmdline-tools/latest/bin" >> "$GITHUB_PATH"
+            echo "preinstalled=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "preinstalled=false" >> "$GITHUB_OUTPUT"
+          fi
+        continue-on-error: true
+
+      - name: Configurar el SDK de Android (respaldo, solo si el runner no lo trae)
+        if: steps.sdk_check.outputs.preinstalled != 'true'
         uses: android-actions/setup-android@v3
 
       - name: Instalar plataforma y build-tools de Android (compileSdk 35)
-        run: sdkmanager "platforms;android-35" "build-tools;35.0.0"
+        run: |
+          yes | sdkmanager --licenses > /dev/null 2>&1 || true
+          sdkmanager "platforms;android-35" "build-tools;35.0.0"
 
       - name: Cachear Gradle (usa el wrapper del repo, ./gradlew)
         uses: gradle/actions/setup-gradle@v4
