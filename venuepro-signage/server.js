@@ -65,6 +65,38 @@ export function deviceManifest(db, d, origin) {
 function deriveSnapshotUrl(url) {
  return url.replace(/\/api\/stream\.mp4(\?|$)/, '/api/frame.jpeg$1');
 }
+// go2rtc también sabe hablar WebRTC directo (WHEP: el navegador manda su
+// oferta SDP por POST, go2rtc contesta con la respuesta) — es lo que usa
+// el propio dashboard de Home Assistant y por eso se ve casi sin
+// latencia, a diferencia del MP4 progresivo (pensado para navegadores que
+// ni siquiera pueden intentar WebRTC, ej. remotos sin ruta a la LAN).
+function deriveWebrtcUrl(url) {
+ // A diferencia de deriveSnapshotUrl (donde una URL que no matchea el
+ // patrón simplemente se queda igual, un "mejor esfuerzo" aceptable), acá
+ // SÍ hace falta null explícito en el que no matchea — WebRTC solo lo
+ // habla go2rtc, ninguna otra fuente HTTP genérica lo soporta, así que
+ // vale más fallar rápido con un mensaje claro que esperar un timeout de
+ // 8s intentando hablarle WHEP a algo que no es go2rtc.
+ try {
+  const u = new URL(url);
+  if (!u.searchParams.get('src') || !u.pathname.endsWith('/api/stream.mp4')) return null;
+  return url.replace(/\/api\/stream\.mp4(\?|$)/, '/api/webrtc$1');
+ } catch { return null; }
+}
+// A diferencia de proxyLiveFeed (que repite bytes de video sin parar),
+// esto es un intercambio chiquito de una sola vez: la oferta SDP del
+// navegador entra, la respuesta SDP de go2rtc sale — el video en sí NO
+// pasa por este proxy, negocia directo por ICE entre el navegador y
+// go2rtc (por eso solo funciona bien si están en la misma red; si no,
+// el navegador cae solo al MP4 de siempre).
+async function proxyWebrtcOffer(url, offerSdp, res) {
+ let upstream;
+ try { upstream = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/sdp' }, body: offerSdp, signal: AbortSignal.timeout(8000) }); }
+ catch (e) { throw fail(502, 'No se pudo conectar con la fuente en vivo.'); }
+ if (!upstream.ok) throw fail(502, 'La fuente en vivo respondió con un error.');
+ res.set('Content-Type', 'application/sdp');
+ res.send(await upstream.text());
+}
 async function proxyLiveFeed(url, req, res) {
  const controller = new AbortController();
  req.on('close', () => controller.abort());
@@ -220,6 +252,19 @@ export function createApp(env = process.env, studioOptions = {}) {
   if(!d.live_source)throw fail(409,'Esta pantalla no tiene una señal en vivo configurada.');
   await proxyLiveFeed(req.query.mode==='snapshot'?deriveSnapshotUrl(d.live_source):d.live_source,req,res);
  }));
+ // WebRTC directo (WHEP) para la vista previa del panel — casi cero
+ // latencia si el navegador está en la misma red que el Mini PC (el
+ // video negocia directo por ICE, este endpoint solo pasa la oferta/
+ // respuesta SDP una vez). Si el navegador es remoto y no logra
+ // conectar, el panel cae solo al MP4 de siempre (/live-feed de arriba).
+ app.post('/api/devices/:id/webrtc-offer',admin,express.raw({type:'application/sdp',limit:'64kb'}),wrap(async(req,res)=>{
+  const d=db.prepare('SELECT live_source FROM devices WHERE id=? AND tenant=?').get(req.params.id,req.user.tenant);
+  if(!d)throw fail(404,'Pantalla no encontrada.');
+  if(!d.live_source)throw fail(409,'Esta pantalla no tiene una señal en vivo configurada.');
+  const webrtcUrl=deriveWebrtcUrl(d.live_source);
+  if(!webrtcUrl)throw fail(409,'Esta fuente no admite WebRTC.');
+  await proxyWebrtcOffer(webrtcUrl,req.body,res);
+ }));
  // Mezcla sobre la señal en vivo — igual que live_source, es control-plane
  // puro: guardamos la intención (layout + qué promo + si va mudo) y quien
  // la compone de verdad es el reproductor real, leyendo esto del manifiesto.
@@ -312,6 +357,15 @@ export function createApp(env = process.env, studioOptions = {}) {
   const c=db.prepare('SELECT url FROM channels WHERE id=? AND tenant=?').get(req.params.id,req.user.tenant);
   if(!c)throw fail(404,'Canal no encontrado.');
   await proxyLiveFeed(req.query.mode==='snapshot'?deriveSnapshotUrl(c.url):c.url,req,res);
+ }));
+ // Mismo WHEP que /api/devices/:id/webrtc-offer, para previsualizar un
+ // canal directo (item de lista, no fuente en vivo de una pantalla).
+ app.post('/api/channels/:id/webrtc-offer',admin,express.raw({type:'application/sdp',limit:'64kb'}),wrap(async(req,res)=>{
+  const c=db.prepare('SELECT url FROM channels WHERE id=? AND tenant=?').get(req.params.id,req.user.tenant);
+  if(!c)throw fail(404,'Canal no encontrado.');
+  const webrtcUrl=deriveWebrtcUrl(c.url);
+  if(!webrtcUrl)throw fail(409,'Este canal no admite WebRTC.');
+  await proxyWebrtcOffer(webrtcUrl,req.body,res);
  }));
  app.post('/api/pair/start',limit('pair-start',20),wrap(async(req,res)=>{
   db.prepare('DELETE FROM devices WHERE tenant IS NULL AND expires<?').run(Date.now());

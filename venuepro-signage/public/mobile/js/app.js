@@ -772,13 +772,16 @@ function bigPreview(d) {
   const box = `width:100%;aspect-ratio:${ratio};max-height:340px;border-radius:14px;overflow:hidden;background:repeating-linear-gradient(135deg,#242830 0 7px,#1c1f25 7px 14px);display:flex;align-items:center;justify-content:center;margin-bottom:14px;position:relative`;
   // Fuente en vivo real: el navegador NUNCA pide la URL de la LAN
   // directamente (chocaría con contenido mixto y con la CSP del propio
-  // backend) — pide /api/devices/:id/live-feed, que es el VPS quien la
-  // trae y la repite tal cual. live_source debe ser un endpoint de video
-  // puro (ej. .../api/stream.mp4?src=NOMBRE de go2rtc), no una página
-  // como stream.html (esa abre su propio WebSocket, que esto no proxea).
+  // backend) — intenta primero WebRTC directo (casi cero latencia si el
+  // navegador está en la misma red que el Mini PC, igual que el
+  // dashboard de Home Assistant — ver wireLiveFeedFallbacks()) y si no
+  // logra conectar (navegador remoto, etc.) cae solo al MP4 de siempre
+  // por /api/devices/:id/live-feed. live_source debe ser un endpoint de
+  // video puro (ej. .../api/stream.mp4?src=NOMBRE de go2rtc), no una
+  // página como stream.html (esa abre su propio WebSocket, que esto no proxea).
   if (d.liveSource) {
     return `<div style="${box}">
-      <video autoplay muted playsinline src="/api/devices/${esc(d.id)}/live-feed" data-snapshot-src="/api/devices/${esc(d.id)}/live-feed?mode=snapshot" style="position:absolute;inset:0;width:100%;height:100%;object-fit:cover"></video>
+      <video autoplay muted playsinline data-webrtc-offer="/api/devices/${esc(d.id)}/webrtc-offer" data-mp4-src="/api/devices/${esc(d.id)}/live-feed" data-snapshot-src="/api/devices/${esc(d.id)}/live-feed?mode=snapshot" style="position:absolute;inset:0;width:100%;height:100%;object-fit:cover"></video>
       ${d.mix ? mixOverlayHtml(d.mix) : ''}
       <div class="badge-live" style="position:absolute;top:10px;left:10px"><div class="dot dot-sm" style="background:var(--red)"></div><span>EN DIRECTO</span></div>
     </div>`;
@@ -792,7 +795,7 @@ function bigPreview(d) {
     const c = remote.channels.find(c => c.id === firstItem.channel);
     if (!c) return `<div style="${box}"><span style="font:500 10px var(--mono);color:var(--ink-faint)">canal no disponible</span></div>`;
     return `<div style="${box}">
-      <video autoplay muted playsinline src="${channelLiveFeedUrl(c.id)}" data-snapshot-src="${channelLiveFeedUrl(c.id, 'snapshot')}" style="position:absolute;inset:0;width:100%;height:100%;object-fit:cover"></video>
+      <video autoplay muted playsinline data-webrtc-offer="/api/channels/${esc(c.id)}/webrtc-offer" data-mp4-src="${channelLiveFeedUrl(c.id)}" data-snapshot-src="${channelLiveFeedUrl(c.id, 'snapshot')}" style="position:absolute;inset:0;width:100%;height:100%;object-fit:cover"></video>
       <div class="badge-live" style="position:absolute;top:10px;left:10px"><div class="dot dot-sm" style="background:var(--red)"></div><span>EN DIRECTO</span></div>
     </div>`;
   }
@@ -1563,25 +1566,65 @@ function render() {
 // reproducir de verdad (sigue en pausa y en el segundo 0), lo tratamos
 // igual que un error y pasamos a la foto.
 let snapshotTimers = [];
+// PeerConnections de WebRTC abiertas por el render actual — hay que
+// cerrarlas explícitamente en cada render() (innerHTML= tira el <video>
+// pero no cierra solo la conexión) para no dejar conexiones fantasma.
+let activePeerConnections = [];
+function startMp4WithSnapshotFallback(video) {
+  let swapped = false;
+  const toSnapshot = () => {
+    if (swapped) return; swapped = true;
+    const img = document.createElement('img');
+    img.setAttribute('style', video.getAttribute('style') || '');
+    img.alt = 'señal en vivo';
+    const base = video.dataset.snapshotSrc;
+    const refresh = () => { img.src = base + (base.includes('?') ? '&' : '?') + 't=' + Date.now(); };
+    refresh();
+    snapshotTimers.push(setInterval(refresh, 1500));
+    video.replaceWith(img);
+  };
+  video.addEventListener('error', toSnapshot, { once: true });
+  video.src = video.dataset.mp4Src || video.getAttribute('src');
+  setTimeout(() => { if (video.isConnected && video.paused && video.currentTime === 0) toSnapshot(); }, 4000);
+}
+// WebRTC directo (WHEP contra go2rtc) para la vista previa del panel —
+// casi cero latencia si el navegador está en la misma red que el Mini PC
+// (igual que el dashboard de Home Assistant), porque una vez negociada la
+// oferta/respuesta SDP (lo único que pasa por nuestro proxy same-origin,
+// para no romper la CSP connect-src 'self'), el video va directo por ICE
+// entre el navegador y go2rtc — nunca por el VPS. Si el navegador está en
+// otra red (admin remoto) simplemente no va a lograr conectar por ICE en
+// unos segundos, y ahí cae solo al MP4 de siempre (misma ruta que antes).
+async function tryWebrtcThenFallback(video) {
+  if (typeof RTCPeerConnection === 'undefined') return startMp4WithSnapshotFallback(video);
+  try {
+    const pc = new RTCPeerConnection();
+    activePeerConnections.push(pc);
+    pc.addTransceiver('video', { direction: 'recvonly' });
+    pc.ontrack = e => { video.srcObject = e.streams[0]; };
+    const offer = await pc.createOffer();
+    await pc.setLocalDescription(offer);
+    const res = await fetch(video.dataset.webrtcOffer, { method: 'POST', headers: { 'Content-Type': 'application/sdp' }, body: offer.sdp, signal: AbortSignal.timeout(4000) });
+    if (!res.ok) throw new Error('oferta WebRTC rechazada');
+    await pc.setRemoteDescription({ type: 'answer', sdp: await res.text() });
+    await new Promise((resolve, reject) => {
+      const timer = setTimeout(() => reject(new Error('WebRTC no conectó a tiempo')), 4000);
+      pc.addEventListener('connectionstatechange', () => {
+        if (pc.connectionState === 'connected') { clearTimeout(timer); resolve(); }
+        else if (pc.connectionState === 'failed' || pc.connectionState === 'closed') { clearTimeout(timer); reject(new Error('ICE falló')); }
+      });
+    });
+  } catch (e) {
+    if (video.isConnected) startMp4WithSnapshotFallback(video);
+  }
+}
 function wireLiveFeedFallbacks() {
   snapshotTimers.forEach(t => clearInterval(t));
   snapshotTimers = [];
-  document.querySelectorAll('video[data-snapshot-src]').forEach(video => {
-    let swapped = false;
-    const toSnapshot = () => {
-      if (swapped) return; swapped = true;
-      const img = document.createElement('img');
-      img.setAttribute('style', video.getAttribute('style') || '');
-      img.alt = 'señal en vivo';
-      const base = video.dataset.snapshotSrc;
-      const refresh = () => { img.src = base + (base.includes('?') ? '&' : '?') + 't=' + Date.now(); };
-      refresh();
-      snapshotTimers.push(setInterval(refresh, 1500));
-      video.replaceWith(img);
-    };
-    video.addEventListener('error', toSnapshot, { once: true });
-    setTimeout(() => { if (video.isConnected && video.paused && video.currentTime === 0) toSnapshot(); }, 4000);
-  });
+  activePeerConnections.forEach(pc => pc.close());
+  activePeerConnections = [];
+  document.querySelectorAll('video[data-webrtc-offer]').forEach(tryWebrtcThenFallback);
+  document.querySelectorAll('video[data-snapshot-src]:not([data-webrtc-offer])').forEach(startMp4WithSnapshotFallback);
 }
 
 refresh();
