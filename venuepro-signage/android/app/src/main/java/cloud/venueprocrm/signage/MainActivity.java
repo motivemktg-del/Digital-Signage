@@ -102,25 +102,10 @@ public class MainActivity extends Activity {
  // igual con la lista normal de fotos/videos.
  private FrameLayout alertOverlay;
  private Runnable alertBlinkRunnable;
- // Etiqueta de diagnóstico TEMPORAL — mientras se investiga por qué el mix
- // no aparece en cierta pantalla física. Muestra qué camino de video está
- // activo de verdad (webrtc/rtsp/mp4/foto) y si el overlay del mix se armó
- // en este momento, así la próxima prueba da evidencia real en vez de
- // seguir adivinando a ciegas. Chica, gris, esquina superior izquierda —
- // se puede quitar una vez resuelto el bug de una vez por todas.
- private TextView debugTag;
- private void updateDebugTag(){
-  if(debugTag==null)return;
-  String path=webrtcRenderer!=null?"webrtc":exoPlayer!=null?"rtsp":mediaPlayer!=null?"mp4":photo!=null?"foto":"—";
-  debugTag.setText(path+" · mix:"+(mixOverlay!=null?"sí":"no"));
-  debugTag.bringToFront();
- }
  @Override public void onCreate(Bundle b){super.onCreate(b);
   getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
   getWindow().getDecorView().setSystemUiVisibility(View.SYSTEM_UI_FLAG_FULLSCREEN|View.SYSTEM_UI_FLAG_HIDE_NAVIGATION|View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY);
   root=new FrameLayout(this);root.setBackgroundColor(Color.BLACK);setContentView(root);root.setClipChildren(true);root.addOnLayoutChangeListener((v,l,t,r,bottom,ol,ot,or,ob)->{if(r-l!=or-ol||bottom-t!=ob-ot)layoutDisplay();});
-  debugTag=new TextView(this);debugTag.setTextColor(Color.argb(180,200,205,210));debugTag.setTextSize(9);debugTag.setBackgroundColor(Color.argb(140,0,0,0));debugTag.setPadding(6,3,6,3);
-  root.addView(debugTag,new FrameLayout.LayoutParams(FrameLayout.LayoutParams.WRAP_CONTENT,FrameLayout.LayoutParams.WRAP_CONTENT,Gravity.TOP|Gravity.START));
   assets=new File(getFilesDir(),"media");assets.mkdirs();
   secret=getPreferences(0).getString("secret","");
   try{current=new JSONObject(new String(new AtomicFile(new File(getFilesDir(),"manifest.json")).readFully(),StandardCharsets.UTF_8));version=current.getString("version");liveSource=current.optString("liveSource","");liveSourceRtsp=current.optString("liveSourceRtsp","");liveSourceWebrtc=current.optString("liveSourceWebrtc","");}catch(Exception ignored){}
@@ -237,7 +222,7 @@ public class MainActivity extends Activity {
   }
   return manifest.getJSONArray("items");
  }
- private void stopPlayback(){ui.removeCallbacks(advance);if(alertBlinkRunnable!=null){ui.removeCallbacks(alertBlinkRunnable);alertBlinkRunnable=null;}if(mediaPlayer!=null){mediaPlayer.release();mediaPlayer=null;}if(exoPlayer!=null){exoPlayer.release();exoPlayer=null;}if(webrtcPc!=null){webrtcPc.close();webrtcPc=null;}if(webrtcRenderer!=null){webrtcRenderer.release();webrtcRenderer=null;}video=null;canvas=null;videoWidth=0;videoHeight=0;if(photo!=null){photo.setImageDrawable(null);photo=null;}mixOverlay=null;lastMixJson=null;alertOverlay=null;livePlayingUrl="";playing=false;root.removeAllViews();if(debugTag!=null)root.addView(debugTag);updateDebugTag();}
+ private void stopPlayback(){ui.removeCallbacks(advance);if(alertBlinkRunnable!=null){ui.removeCallbacks(alertBlinkRunnable);alertBlinkRunnable=null;}if(mediaPlayer!=null){mediaPlayer.release();mediaPlayer=null;}if(exoPlayer!=null){exoPlayer.release();exoPlayer=null;}if(webrtcPc!=null){webrtcPc.close();webrtcPc=null;}if(webrtcRenderer!=null){webrtcRenderer.release();webrtcRenderer=null;}video=null;canvas=null;videoWidth=0;videoHeight=0;if(photo!=null){photo.setImageDrawable(null);photo=null;}mixOverlay=null;lastMixJson=null;alertOverlay=null;livePlayingUrl="";playing=false;root.removeAllViews();}
  // Si el manifiesto trae liveSourceWebrtc, se intenta ESA primero — WebRTC
  // puede pedirle un keyframe al encoder al conectarse, cosa que RTSP no
  // puede hacer (solo espera al próximo programado). Si no logra conectar
@@ -586,7 +571,6 @@ public class MainActivity extends Activity {
   // "root", así que FrameLayout la dibuja arriba de todo lo demás.
   syncAlertOverlay();
   if(alertOverlay!=null){alertOverlay.setLayoutParams(new FrameLayout.LayoutParams(w,h,Gravity.CENTER));alertOverlay.setRotation(angle);}
-  updateDebugTag();
  }
  // Agrega/reconstruye/quita la alerta de emergencia según el manifiesto
  // actual — mismo patrón que syncMixOverlay(), pero SIN el chequeo de
