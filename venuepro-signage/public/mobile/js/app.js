@@ -18,6 +18,9 @@ const ui = {
   studioJob: null,      // job de generación en curso/último para este borrador
   studioPolling: false,
   studioConfigForm: null, // { apiKey:'', enabled, monthlyLimit } al editar la config
+  ptzCameraId: null,  // cámara abierta en viewPtz
+  ptzLocal: null,      // { x, y, zoom, presetId } — posición ASUMIDA, sin
+                        // confirmación real de la cámara (no hay agente local)
 };
 
 let remote = null; // último resultado de getState(): { tenant, role, email, locations, devices, assets, playlists, schedules }
@@ -92,6 +95,57 @@ const actions = {
     const loc = remote.locations.find(l => l.id === id);
     if (!confirm(`¿Eliminar la ubicación "${loc ? loc.name : ''}"? Esto no se puede deshacer.`)) return;
     await run(deleteLocation(id), 'Ubicación eliminada');
+  },
+
+  // -- cámaras PTZ (backend real; sin agente local todavía, ver PLAYER_SPEC.md) --
+  async addPtzCamera(locationId) {
+    const name = prompt('Nombre de la cámara (ej. PTZ Escenario):'); if (!name) return;
+    const onvifUrl = prompt('URL ONVIF (xAddr) — ej. http://192.168.1.41/onvif/device_service. Déjalo vacío si no la tienes aún:') || null;
+    const rtspUrl = prompt('URL RTSP del video (opcional):') || null;
+    await run(createPtzCamera({ name, location: locationId, onvifUrl, rtspUrl }), 'Cámara agregada');
+  },
+  async deletePtzCameraNow(id) {
+    if (!confirm('¿Eliminar esta cámara PTZ?')) return;
+    await run(deletePtzCamera(id), 'Cámara eliminada');
+  },
+  openPtz(camId) {
+    ui.ptzCameraId = camId; ui.ptzLocal = { x: 0, y: 0, zoom: 1, presetId: null };
+    ui.route = 'ptz'; render();
+  },
+  backFromPtz() { ui.route = 'locationDetail'; render(); },
+  ptzNudge(dir) {
+    const s = ui.ptzLocal; s.presetId = null;
+    const dx = dir === 'left' ? -8 : dir === 'right' ? 8 : 0, dy = dir === 'up' ? -6 : dir === 'down' ? 6 : 0;
+    s.x = Math.max(-40, Math.min(40, s.x + dx)); s.y = Math.max(-24, Math.min(24, s.y + dy));
+    sendPtzCommand(ui.ptzCameraId, 'nudge', { dx, dy }).catch(e => showToast(e.message, true));
+    render();
+  },
+  ptzHome() {
+    ui.ptzLocal = { x: 0, y: 0, zoom: 1, presetId: null };
+    sendPtzCommand(ui.ptzCameraId, 'home', {}).catch(e => showToast(e.message, true));
+    render();
+  },
+  ptzZoom(dir) {
+    const s = ui.ptzLocal; s.presetId = null;
+    s.zoom = dir === 'in' ? Math.min(3.2, +(s.zoom + .3).toFixed(1)) : Math.max(1, +(s.zoom - .3).toFixed(1));
+    sendPtzCommand(ui.ptzCameraId, 'zoom', { delta: dir === 'in' ? 1 : -1 }).catch(e => showToast(e.message, true));
+    render();
+  },
+  ptzGoPreset(presetId) {
+    const cam = remote.ptzCameras.find(c => c.id === ui.ptzCameraId); if (!cam) return;
+    const p = cam.presets.find(p => p.id === presetId); if (!p) return;
+    ui.ptzLocal = { x: p.pan, y: p.tilt, zoom: p.zoom, presetId: p.id };
+    sendPtzCommand(ui.ptzCameraId, 'preset', { pan: p.pan, tilt: p.tilt, zoom: p.zoom }).catch(e => showToast(e.message, true));
+    render();
+  },
+  async ptzSavePresetNow() {
+    const label = prompt('Nombre del encuadre (ej. Barra, Cocina):'); if (!label) return;
+    const s = ui.ptzLocal;
+    await run(savePtzPreset(ui.ptzCameraId, { label, pan: s.x, tilt: s.y, zoom: s.zoom }), 'Encuadre guardado');
+  },
+  async ptzDeletePresetNow(presetId) {
+    if (!confirm('¿Eliminar este encuadre guardado?')) return;
+    await run(deletePtzPreset(ui.ptzCameraId, presetId), 'Encuadre eliminado');
   },
   onvifSoon() { showToast('Canal ONVIF: próximamente'); },
   openLocation(id) { ui.currentLocationId = id; ui.route = 'locationDetail'; render(); },
@@ -431,12 +485,90 @@ function viewLocationDetail() {
   const loc = remote.locations.find(l => l.id === ui.currentLocationId);
   if (!loc) { ui.route = 'locations'; return viewLocations(); }
   const devices = remote.devices.filter(d => d.location === loc.id);
+  const cams = (remote.ptzCameras || []).filter(c => c.location === loc.id);
   return `<div class="screen">
     <div class="topbar"><div class="back" ${A('goLocations')}>‹</div><div class="title">${esc(loc.name)}</div></div>
     <div class="content">
-      ${devices.length === 0 ? emptyState('Sin pantallas aquí todavía', 'Empareja una pantalla y elige esta ubicación, o mueve una existente desde su detalle.') : `<div class="grid-2">${devices.map(deviceRow).join('')}</div>`}
+      <div class="eyebrow">Pantallas</div>
+      ${devices.length === 0 ? emptyState('Sin pantallas aquí todavía', 'Empareja una pantalla y elige esta ubicación, o mueve una existente desde su detalle.') : `<div class="grid-2" style="margin-bottom:20px">${devices.map(deviceRow).join('')}</div>`}
+
+      <div class="row" style="justify-content:space-between;align-items:baseline;margin-bottom:11px">
+        <div class="eyebrow" style="margin:0">Cámaras PTZ</div>
+        <div class="row-tap" style="font:600 11px var(--sans);color:var(--accent)" ${A('addPtzCamera', loc.id)}>+ Agregar</div>
+      </div>
+      <div class="stack">
+        ${cams.length === 0 ? `<div style="padding:14px 0;text-align:center;color:var(--ink-faint);font:400 11.5px var(--sans)">Sin cámaras PTZ en esta ubicación.</div>` : cams.map(c => `<div class="card row" style="padding:12px 14px">
+          <div class="row-tap" style="flex:1;min-width:0" ${A('openPtz', c.id)}>
+            <div style="font:600 12.5px var(--sans)">${esc(c.name)}</div>
+            <div style="font:400 10px var(--mono);color:var(--ink-dimmer);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${c.onvif_url ? 'ONVIF configurado' : 'sin URL ONVIF'} · ${c.presets.length} encuadre${c.presets.length === 1 ? '' : 's'}</div>
+          </div>
+          <div class="row-tap" title="Eliminar cámara" style="margin-left:8px" ${A('deletePtzCameraNow', c.id)}>🗑️</div>
+        </div>`).join('')}
+      </div>
     </div>
     ${ui.detailDeviceId ? deviceSheet() : ''}
+    ${toastHtml()}
+  </div>`;
+}
+
+// Control PTZ. La cruceta/zoom/presets mandan comandos reales al backend
+// (ver PLAYER_SPEC.md), pero la posición que se ve aquí es la que ASUME el
+// panel, no una confirmada por la cámara — no hay agente local todavía que
+// hable ONVIF de verdad y devuelva la posición real.
+function viewPtz() {
+  const cam = (remote.ptzCameras || []).find(c => c.id === ui.ptzCameraId);
+  if (!cam) return `<div class="screen"><div class="topbar"><div class="back" ${A('backFromPtz')}>‹</div></div><div class="content" style="padding-top:30px;text-align:center;color:var(--ink-faint)">Cámara no encontrada.</div></div>`;
+  const s = ui.ptzLocal;
+  const zoomPct = Math.round((s.zoom - 1) / 2.2 * 100);
+  const frameW = Math.round(100 / s.zoom) + '%';
+  return `<div class="screen">
+    <div class="topbar"><div class="back" ${A('backFromPtz')}>‹</div><div class="title">${esc(cam.name)}</div></div>
+    <div class="content">
+      <div style="font:400 10px var(--mono);color:var(--ink-faint);margin-bottom:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${cam.onvif_url ? 'ONVIF · ' + esc(cam.onvif_url) : 'Sin URL ONVIF configurada todavía'}</div>
+
+      <div style="position:relative;aspect-ratio:16/9;border-radius:14px;overflow:hidden;background:repeating-linear-gradient(135deg,#242830 0 7px,#1c1f25 7px 14px);margin-bottom:7px">
+        <div style="position:absolute;inset:0;display:flex;align-items:center;justify-content:center;font:500 10px var(--mono);color:var(--ink-faint);text-align:center;padding:0 16px">${cam.rtsp_url ? 'preview en vivo: próximamente (RTSP configurado)' : 'sin URL de video configurada'}</div>
+        <div style="position:absolute;top:50%;left:50%;width:${frameW};height:${frameW};border:1.5px solid rgba(47,123,246,.85);border-radius:6px;box-shadow:0 0 0 9999px rgba(14,15,18,.45);transform:translate(-50%,-50%) translate(${s.x}px,${s.y}px);transition:all .22s cubic-bezier(.22,.9,.3,1)"></div>
+        <div style="position:absolute;bottom:11px;right:11px;padding:4px 9px;border-radius:6px;background:rgba(14,15,18,.84);font:600 9.5px var(--mono);color:#c4c9cf">${s.zoom.toFixed(1)}×</div>
+      </div>
+      <div style="font:400 10.5px var(--mono);color:var(--ink-dim);margin-bottom:2px">${(s.x === 0 && s.y === 0) ? 'centrada' : `pan ${s.x > 0 ? '+' : ''}${s.x}° · tilt ${s.y > 0 ? '+' : ''}${s.y}°`}</div>
+      <div style="font:400 9.5px var(--mono);color:var(--ink-faint);margin-bottom:14px">posición estimada — sin confirmar contra la cámara</div>
+
+      <div class="row" style="justify-content:space-between;align-items:baseline;margin-bottom:9px">
+        <div class="eyebrow" style="margin:0">Encuadres guardados</div>
+        <div class="row-tap" style="font:600 11px var(--sans);color:var(--accent)" ${A('ptzSavePresetNow')}>+ Guardar actual</div>
+      </div>
+      <div class="grid-2" style="grid-template-columns:repeat(3,1fr);margin-bottom:18px">
+        ${cam.presets.length === 0 ? `<div style="grid-column:1/-1;padding:10px 0;text-align:center;color:var(--ink-faint);font:400 11px var(--sans)">Sin encuadres guardados.</div>` : cam.presets.map(p => `<div style="position:relative">
+          <div class="row-tap" style="text-align:center;padding:9px 4px;border-radius:10px;background:${s.presetId === p.id ? 'rgba(47,123,246,.12)' : 'var(--card-2)'};border:1.5px solid ${s.presetId === p.id ? 'var(--accent)' : 'var(--line)'}" ${A('ptzGoPreset', p.id)}>
+            <div style="font:600 10.5px var(--sans);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(p.label)}</div>
+          </div>
+          <div class="row-tap" title="Eliminar" style="position:absolute;top:-6px;right:-6px;width:20px;height:20px;border-radius:50%;background:var(--card);border:1px solid var(--line);display:flex;align-items:center;justify-content:center;font:600 10px var(--sans);color:var(--red)" ${A('ptzDeletePresetNow', p.id)}>×</div>
+        </div>`).join('')}
+      </div>
+
+      <div class="row" style="gap:14px;align-items:center">
+        <div style="display:grid;grid-template-columns:repeat(3,40px);grid-template-rows:repeat(3,40px);gap:5px;flex:none">
+          <div></div>
+          <div class="row-tap" style="display:flex;align-items:center;justify-content:center;border-radius:10px;background:var(--card-2);border:1px solid var(--line)" ${A('ptzNudge', 'up')}>▲</div>
+          <div></div>
+          <div class="row-tap" style="display:flex;align-items:center;justify-content:center;border-radius:10px;background:var(--card-2);border:1px solid var(--line)" ${A('ptzNudge', 'left')}>◀</div>
+          <div class="row-tap" style="display:flex;align-items:center;justify-content:center;border-radius:10px;background:#1b1d22;border:1px solid rgba(255,255,255,.12);font:600 9px var(--mono);color:var(--ink-dim)" ${A('ptzHome')}>HOME</div>
+          <div class="row-tap" style="display:flex;align-items:center;justify-content:center;border-radius:10px;background:var(--card-2);border:1px solid var(--line)" ${A('ptzNudge', 'right')}>▶</div>
+          <div></div>
+          <div class="row-tap" style="display:flex;align-items:center;justify-content:center;border-radius:10px;background:var(--card-2);border:1px solid var(--line)" ${A('ptzNudge', 'down')}>▼</div>
+          <div></div>
+        </div>
+        <div style="flex:1;min-width:0">
+          <div class="row" style="justify-content:space-between;margin-bottom:8px"><span style="font:600 10.5px var(--mono);color:var(--ink-dimmer);letter-spacing:.08em">ZOOM</span><span style="font:600 11px var(--sans)">${s.zoom.toFixed(1)}×</span></div>
+          <div class="progress-track" style="margin-bottom:10px"><div class="progress-fill" style="width:${zoomPct}%;background:var(--accent)"></div></div>
+          <div class="row" style="gap:8px">
+            <div class="row-tap" style="flex:1;padding:11px 0;text-align:center;border-radius:10px;background:var(--card-2);border:1px solid var(--line);font:600 14px var(--sans)" ${A('ptzZoom', 'out')}>−</div>
+            <div class="row-tap" style="flex:1;padding:11px 0;text-align:center;border-radius:10px;background:var(--card-2);border:1px solid var(--line);font:600 14px var(--sans)" ${A('ptzZoom', 'in')}>+</div>
+          </div>
+        </div>
+      </div>
+    </div>
     ${toastHtml()}
   </div>`;
 }
@@ -953,6 +1085,7 @@ function render() {
     case 'locationDetail': app.innerHTML = viewLocationDetail(); break;
     case 'studio': app.innerHTML = viewStudio(); break;
     case 'studioDraft': app.innerHTML = viewStudioDraft(); break;
+    case 'ptz': app.innerHTML = viewPtz(); break;
     default: app.innerHTML = viewHome();
   }
 }

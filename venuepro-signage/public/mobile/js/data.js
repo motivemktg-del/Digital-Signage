@@ -37,6 +37,14 @@ function getState() { return api('/api/state'); }
 function createLocation(name) { return api('/api/locations', { method: 'POST', body: { name } }); }
 function deleteLocation(id) { return api(`/api/locations/${id}`, { method: 'DELETE' }); }
 function deleteStudioDraft(id) { return api(`/api/studio/drafts/${id}`, { method: 'DELETE' }); }
+
+// ---- cámaras PTZ (backend real — ver PLAYER_SPEC.md para el mapeo a ONVIF) --
+function listPtzCameras() { return api('/api/ptz-cameras'); }
+function createPtzCamera(payload) { return api('/api/ptz-cameras', { method: 'POST', body: payload } ); } // {name, location, onvifUrl, rtspUrl}
+function deletePtzCamera(id) { return api(`/api/ptz-cameras/${id}`, { method: 'DELETE' }); }
+function savePtzPreset(camId, preset) { return api(`/api/ptz-cameras/${camId}/presets`, { method: 'POST', body: preset } ); } // {label,pan,tilt,zoom}
+function deletePtzPreset(camId, presetId) { return api(`/api/ptz-cameras/${camId}/presets/${presetId}`, { method: 'DELETE' }); }
+function sendPtzCommand(camId, type, payload) { return api(`/api/ptz-cameras/${camId}/command`, { method: 'POST', body: { type, payload } }); }
 function setDeviceLocation(id, location) { return api(`/api/devices/${id}/location`, { method: 'POST', body: { location } }); }
 function setDeviceDisplay(id, { orientation, rotation, fit }) { return api(`/api/devices/${id}/display`, { method: 'POST', body: { orientation, rotation, fit } }); }
 function setDevicePlayback(id, paused) { return api(`/api/devices/${id}/playback`, { method: 'POST', body: { paused } }); }
