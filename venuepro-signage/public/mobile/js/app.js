@@ -37,6 +37,12 @@ function applyTheme(theme) {
 }
 
 let remote = null; // último resultado de getState(): { tenant, role, email, locations, devices, assets, playlists, schedules }
+// Verdadero solo durante el render() que ABRE una ficha (.sheet) — así esa
+// ficha toca la animación de entrada una sola vez; los siguientes render()
+// mientras sigue abierta (prender un canal, guardar algo) no la repiten.
+// Lo pone en true la acción que abre la ficha, justo antes de llamar
+// render(); render() mismo lo vuelve a false al terminar de dibujar.
+let sheetEntering = false;
 
 function esc(s) { return String(s == null ? '' : s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c])); }
 function A(action, arg) { return `data-action="${action}" data-arg="${esc(arg)}"`; }
@@ -79,7 +85,7 @@ const actions = {
     applyTheme(ui.theme); render();
   },
 
-  openDevice(id) { ui.detailDeviceId = id; ui.deviceMoreOpen = false; render(); },
+  openDevice(id) { ui.detailDeviceId = id; ui.deviceMoreOpen = false; sheetEntering = true; render(); },
   closeDevice() { ui.detailDeviceId = null; render(); },
   toggleDeviceMore() { ui.deviceMoreOpen = !ui.deviceMoreOpen; render(); },
   async togglePause(id) {
@@ -295,16 +301,12 @@ const actions = {
     if (!confirm('¿Eliminar este canal? Las pantallas que lo tengan activo se quedarán sin fuente.')) return;
     await run(deleteChannel(id), 'Canal eliminado');
   },
-  async toggleChannel(arg) {
-    const [deviceId, channelId] = arg.split(':');
-    const d = remote.devices.find(d => d.id === deviceId);
-    const c = remote.channels.find(c => c.id === channelId);
-    if (!d || !c) return;
-    // Por id, no por URL — si dos canales llegaran a compartir la misma
-    // URL (viejos, de antes de bloquear eso al crear), comparar por URL
-    // los mostraría "prendidos" juntos. El id nunca se repite.
-    const on = d.liveChannel === c.id;
-    await run(setLiveChannel(deviceId, on ? null : c.id), on ? 'Canal apagado' : 'Canal activado');
+  // Un solo <select> decide la Fuente: "" = lista de reproducción, o el id
+  // de un canal — por id, no por URL (si dos canales llegaran a compartir
+  // la misma URL, viejos de antes de bloquear eso al crear, comparar por
+  // URL los mostraría "prendidos" juntos; el id nunca se repite).
+  async setDeviceSource(id, select) {
+    await run(setLiveChannel(id, select.value || null), select.value ? 'Canal activado' : 'Volviendo a la lista');
   },
   // -- mezclador (backend real: layout+texto+logo+promo sobre la señal en
   // vivo, ver /api/devices/:id/mix en server.js) --
@@ -370,11 +372,6 @@ const actions = {
     if (!confirm(`¿Aplicar "${t.name}" a TODAS tus pantallas con señal en vivo (${n})?`)) return;
     await run(applyMixTemplateToAll(id, null), `Aplicada a ${n} pantalla(s)`);
   },
-  async useDefaultPlaylistSource(id) {
-    const d = remote.devices.find(d => d.id === id); if (!d.liveSource) return;
-    await run(setLiveSource(id, null), 'Fuente en vivo quitada');
-  },
-
   // -- emparejar --
   // El código lo genera la PANTALLA (la TV/tablet llama a /api/pair/start
   // sola, sin sesión, y muestra su propio QR+código) — el admin solo lo
@@ -434,10 +431,10 @@ const actions = {
     await run(setAssetFolder(assetId, select.value), 'Archivo movido a la carpeta');
     select.value = '';
   },
-  newPlaylist() { ui.playlistDraft = { id: null, name: '', items: [] }; render(); },
+  newPlaylist() { ui.playlistDraft = { id: null, name: '', items: [] }; sheetEntering = true; render(); },
   editPlaylist(id) {
     const p = remote.playlists.find(p => p.id === id); if (!p) return;
-    ui.playlistDraft = { id: p.id, name: p.name, items: p.items.map(i => ({ ...i })) }; render();
+    ui.playlistDraft = { id: p.id, name: p.name, items: p.items.map(i => ({ ...i })) }; sheetEntering = true; render();
   },
   cancelPlaylist() { ui.playlistDraft = null; render(); },
   addDraftItem(_, select) {
@@ -466,11 +463,11 @@ const actions = {
   // -- horarios --
   newSchedule() {
     ui.scheduleDraft = { id: null, device: remote.devices[0]?.id || '', playlist: remote.playlists[0]?.id || '', name: '', timezone: Intl.DateTimeFormat().resolvedOptions().timeZone, days: [1, 2, 3, 4, 5], start: '08:00', end: '18:00', fromDate: '', toDate: '', priority: 0 };
-    render();
+    sheetEntering = true; render();
   },
   editSchedule(id) {
     const s = remote.schedules.find(s => s.id === id); if (!s) return;
-    ui.scheduleDraft = { ...s }; render();
+    ui.scheduleDraft = { ...s }; sheetEntering = true; render();
   },
   cancelSchedule() { ui.scheduleDraft = null; render(); },
   toggleDraftDay(dayStr) {
@@ -949,7 +946,7 @@ function deviceSheet() {
   const status = deviceStatus(d);
   const playlist = remote.playlists.find(p => p.id === d.playlist);
   return `<div class="backdrop" ${A('closeDevice')}></div>
-  <div class="sheet" style="max-height:90vh">
+  <div class="sheet${sheetEntering ? ' entering' : ''}" style="max-height:90vh">
     <div class="sheet-grip"></div>
     <div class="row" style="gap:8px;margin-bottom:3px">
       <div class="dot" style="background:${STATUS_COLOR[status]}"></div>
@@ -960,34 +957,24 @@ function deviceSheet() {
     <div style="font:400 10.5px var(--mono);color:var(--ink-dimmer);margin-bottom:16px">${STATUS_LABEL[status]} · ${fmtTime(d.seen)}${d.error ? ' · ' + esc(d.error) : ''}</div>
     ${bigPreview(d)}
 
-    <div class="eyebrow">Fuente</div>
-    <div class="stack" style="margin-bottom:${d.liveSource ? '10px' : '16px'}">
-      <div class="row card-flat row-tap" style="padding:13px 14px;background:${!d.liveSource ? 'rgba(47,123,246,.12)' : 'var(--card-2)'};border:1.5px solid ${!d.liveSource ? 'var(--accent)' : 'var(--line)'}" ${A('useDefaultPlaylistSource', d.id)}>
-        <div style="width:17px;height:17px;border-radius:50%;flex:none;border:1.5px solid ${!d.liveSource ? 'var(--accent)' : 'rgba(255,255,255,.22)'};display:flex;align-items:center;justify-content:center"><div style="width:8px;height:8px;border-radius:50%;background:${!d.liveSource ? 'var(--accent)' : 'transparent'}"></div></div>
-        <div style="flex:1;min-width:0"><div style="font:600 13px var(--sans);margin-bottom:2px">Lista de reproducción</div><div style="font:400 10.5px var(--mono);color:var(--ink-dimmer)">${playlist ? esc(playlist.name) : 'sin asignar'}</div></div>
-      </div>
-      ${(() => {
-        // Un canal está disponible para cualquier pantalla — no se
-        // restringe por ubicación (salvo los pocos creados antes de este
-        // cambio que sí tengan una ubicación asignada; esos solo se
-        // ofrecen a pantallas de esa misma ubicación).
-        const chans = (remote.channels || []).filter(c => !c.location || c.location === d.location);
-        if (chans.length === 0) return `<div class="row card-flat row-tap" style="padding:13px 14px;opacity:.6" ${A('goTab', 'content')}>
-          <div style="flex:1;min-width:0"><div style="font:600 13px var(--sans);margin-bottom:2px">Sin canales</div><div style="font:400 10.5px var(--mono);color:var(--ink-dimmer)">configúralos en Contenido → Canales</div></div>
-        </div>`;
-        return chans.map(c => {
-          // Por id, no por URL — ver comentario en toggleChannel().
-          const on = d.liveChannel === c.id;
-          return `<div class="row card-flat row-tap" style="padding:13px 14px;background:${on ? 'rgba(47,123,246,.12)' : 'var(--card-2)'};border:1.5px solid ${on ? 'var(--accent)' : 'var(--line)'}" ${A('toggleChannel', `${d.id}:${c.id}`)}>
-            <div style="flex:1;min-width:0"><div style="font:600 13px var(--sans);margin-bottom:2px">${esc(c.name)}</div>${on ? `<div class="tag" style="background:rgba(242,99,90,.14);color:var(--red);display:inline-block">EN DIRECTO</div>` : ''}</div>
-            <div style="width:44px;height:26px;border-radius:13px;background:${on ? 'var(--accent)' : 'var(--card-2)'};border:1px solid var(--line);position:relative;flex:none">
-              <div style="position:absolute;top:2px;left:${on ? '20px' : '2px'};width:20px;height:20px;border-radius:50%;background:#fff;transition:left .15s;box-shadow:0 1px 3px rgba(0,0,0,.3)"></div>
-            </div>
-          </div>`;
-        }).join('');
-      })()}
-    </div>
-    ${d.liveSource ? `<div class="row-tap" style="text-align:center;padding:10px 0;border-radius:12px;background:${d.mix ? 'rgba(47,123,246,.12)' : 'var(--card-2)'};border:1px solid ${d.mix ? 'var(--accent)' : 'var(--line)'};font:600 12px var(--sans);margin-bottom:10px" ${A('openMix', d.id)}>🎛️ ${d.mix ? 'Editar mezcla' : 'Mezclar sobre la señal'}</div>` : ''}
+    ${(() => {
+      // Un canal está disponible para cualquier pantalla — no se restringe
+      // por ubicación (salvo los pocos creados antes de este cambio que sí
+      // tengan una ubicación asignada; esos solo se ofrecen a pantallas de
+      // esa misma ubicación).
+      const chans = (remote.channels || []).filter(c => !c.location || c.location === d.location);
+      return `<div class="eyebrow">Fuente</div>
+      <select data-change="setDeviceSource" data-arg="${esc(d.id)}" style="width:100%;padding:11px;border-radius:10px;background:var(--card-2);border:1.5px solid ${d.liveChannel ? 'var(--accent)' : 'var(--line)'};color:var(--ink);margin-bottom:${d.liveSource ? '10px' : '16px'}">
+        <option value="" ${!d.liveChannel ? 'selected' : ''}>▶ Lista de reproducción${playlist ? ' — ' + esc(playlist.name) : ''}</option>
+        ${chans.map(c => `<option value="${esc(c.id)}" ${d.liveChannel === c.id ? 'selected' : ''}>🔴 ${esc(c.name)}</option>`).join('')}
+      </select>
+      ${chans.length === 0 ? `<div class="row card-flat row-tap" style="padding:11px 14px;opacity:.6;margin-bottom:16px" ${A('goTab', 'content')}>
+        <div style="flex:1;min-width:0"><div style="font:600 12.5px var(--sans);margin-bottom:2px">Sin canales todavía</div><div style="font:400 10.5px var(--mono);color:var(--ink-dimmer)">configúralos en Contenido → Canales</div></div>
+      </div>` : ''}`;
+    })()}
+    ${d.liveSource ? `<div class="row" style="justify-content:flex-end;margin-bottom:10px">
+      <div class="row-tap" style="padding:7px 16px;border-radius:10px;background:${d.mix ? 'rgba(47,123,246,.12)' : 'var(--card-2)'};border:1px solid ${d.mix ? 'var(--accent)' : 'var(--line)'};font:600 12px var(--sans)" ${A('openMix', d.id)}>🎛️ Mezclar</div>
+    </div>` : ''}
     ${d.location && remote.ptzCameras.some(c => c.location === d.location) ? `<div class="row-tap" style="text-align:center;padding:10px 0;border-radius:12px;background:var(--card-2);border:1px solid var(--line);font:600 12px var(--sans);margin-bottom:16px" ${A('openPtzFromDevice', d.id)}>📹 Control PTZ</div>` : ''}
 
     <div class="eyebrow">Lista de reproducción</div>
@@ -1228,7 +1215,7 @@ function viewAssetFolder() {
 
 function playlistEditor(d) {
   return `<div class="backdrop" ${A('cancelPlaylist')}></div>
-  <div class="sheet" style="max-height:90vh">
+  <div class="sheet${sheetEntering ? ' entering' : ''}" style="max-height:90vh">
     <div class="sheet-grip"></div>
     <div class="row" style="margin-bottom:14px">
       <div style="font:700 18px var(--sans);flex:1;min-width:0">${d.id ? 'Editar lista' : 'Nueva lista'}</div>
@@ -1295,7 +1282,7 @@ function viewSchedule() {
 
 function scheduleEditor(d) {
   return `<div class="backdrop" ${A('cancelSchedule')}></div>
-  <div class="sheet" style="max-height:92vh">
+  <div class="sheet${sheetEntering ? ' entering' : ''}" style="max-height:92vh">
     <div class="sheet-grip"></div>
     <div class="row" style="margin-bottom:14px">
       <div style="font:700 18px var(--sans);flex:1;min-width:0">${d.id ? 'Editar programa' : 'Nuevo programa'}</div>
@@ -1547,6 +1534,7 @@ function render() {
     case 'mix': app.innerHTML = viewMix(); break;
     default: app.innerHTML = viewHome();
   }
+  sheetEntering = false;
   wireLiveFeedFallbacks();
 }
 
