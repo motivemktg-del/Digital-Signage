@@ -1,0 +1,33 @@
+name: "Control PTZ (ONVIF)"
+version: "0.1.0"
+slug: "ptz_agent"
+description: >-
+  Ejecuta de verdad los comandos PTZ (cruceta/zoom/encuadres/home) que el
+  panel de venuepro-signage ya guarda — sin este add-on, esos botones solo
+  guardan la intención (ver la nota en store.js), no mueven la cámara
+  física. Habla ONVIF PTZ directo con cada cámara, en la misma LAN. El
+  video (verla/mandarla a pantallas) NO pasa por acá, eso ya funciona con
+  go2rtc como cualquier otra fuente.
+url: "https://github.com/motivemktg-del/Digital-Signage"
+arch:
+  - aarch64
+  - amd64
+init: false
+options:
+  signage_api: ""
+  signage_email: ""
+  signage_password: ""
+  poll_interval_ms: 500
+  nudge_seconds: 0.3
+  nudge_speed: 0.5
+  zoom_seconds: 0.4
+  zoom_speed: 0.5
+schema:
+  signage_api: "url"
+  signage_email: "email"
+  signage_password: "password"
+  poll_interval_ms: "int(200,3000)"
+  nudge_seconds: "float(0.05,2)"
+  nudge_speed: "float(0.05,1)"
+  zoom_seconds: "float(0.05,2)"
+  zoom_speed: "float(0.05,1)"

@@ -1,0 +1,10 @@
+{
+  "signage_api": "https://ds.venueprocrm.cloud",
+  "signage_email": "bot-ptz@tu-tenant.com",
+  "signage_password": "usa-una-contraseña-larga-solo-para-este-bot",
+  "poll_interval_ms": 500,
+  "nudge_seconds": 0.3,
+  "nudge_speed": 0.5,
+  "zoom_seconds": 0.4,
+  "zoom_speed": 0.5
+}
