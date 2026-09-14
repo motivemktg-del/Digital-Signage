@@ -185,6 +185,10 @@ export function createApp(env = process.env, studioOptions = {}) {
  // ---- Carpetas de biblioteca — solo agrupan assets, no mueven el archivo real.
  app.get('/api/asset-folders',admin,(req,res)=>res.json(db.prepare('SELECT * FROM asset_folders WHERE tenant=? ORDER BY name').all(req.user.tenant)));
  app.post('/api/asset-folders',admin,wrap(managed('assetFolder.create',async(req,res)=>{const id=randomUUID();db.prepare('INSERT INTO asset_folders VALUES (?,?,?)').run(id,req.user.tenant,nameOf(req.body.name));res.status(201).json({id});})));
+ app.patch('/api/asset-folders/:id',admin,wrap(managed('assetFolder.rename',async(req,res)=>{
+  if(!db.prepare('UPDATE asset_folders SET name=? WHERE id=? AND tenant=?').run(nameOf(req.body.name),req.params.id,req.user.tenant).changes)throw fail(404,'Carpeta no encontrada.');
+  res.json({ok:true});
+ })));
  app.delete('/api/asset-folders/:id',admin,wrap(managed('assetFolder.delete',async(req,res)=>{
   if(db.prepare('SELECT 1 FROM assets WHERE tenant=? AND folder=? AND archived=0').get(req.user.tenant,req.params.id))throw fail(409,'La carpeta tiene archivos. Muévelos primero.');
   if(!db.prepare('DELETE FROM asset_folders WHERE id=? AND tenant=?').run(req.params.id,req.user.tenant).changes)throw fail(404,'Carpeta no encontrada.');
@@ -338,6 +342,19 @@ export function createApp(env = process.env, studioOptions = {}) {
   const id=randomUUID();
   db.prepare('INSERT INTO channels (id,tenant,location,name,url) VALUES (?,?,?,?,?)').run(id,req.user.tenant,location||null,nameOf(name),url);
   res.status(201).json({id});
+ })));
+ app.patch('/api/channels/:id',admin,wrap(managed('channel.update',async(req,res)=>{
+  const {name,url}=req.body;
+  if(typeof url!=='string'||!/^https?:\/\/[^\s]{1,500}$/i.test(url))throw fail(400,'URL inválida. Usa http:// o https://.');
+  const dup=db.prepare('SELECT 1 FROM channels WHERE tenant=? AND url=? AND id!=?').get(req.user.tenant,url,req.params.id);
+  if(dup)throw fail(409,'Ya existe un canal con esa misma URL.');
+  // La pantalla que ya tenga este canal prendido guarda su URL copiada
+  // (live_source) — igual que al borrar un canal, editarlo no la
+  // actualiza sola ahí; solo aplica la próxima vez que se vuelva a
+  // prender ese switch. Mismo comportamiento ya establecido, no una
+  // inconsistencia nueva.
+  if(!db.prepare('UPDATE channels SET name=?,url=? WHERE id=? AND tenant=?').run(nameOf(name),url,req.params.id,req.user.tenant).changes)throw fail(404,'Canal no encontrado.');
+  res.json({ok:true});
  })));
  app.delete('/api/channels/:id',admin,wrap(managed('channel.delete',async(req,res)=>{
   // A diferencia de la fuente en vivo de una pantalla (que copia la URL,

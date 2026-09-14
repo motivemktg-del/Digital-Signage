@@ -297,6 +297,12 @@ const actions = {
     const url = prompt('URL de VIDEO puro de go2rtc (no la página del visor) — ej. http://192.168.1.10:1984/api/stream.mp4?src=mivideo:'); if (!url) return;
     await run(createChannel({ name, url }), 'Canal creado');
   },
+  async editChannelNow(id) {
+    const c = remote.channels.find(c => c.id === id); if (!c) return;
+    const name = prompt('Nombre del canal:', c.name); if (!name) return;
+    const url = prompt('URL de VIDEO puro de go2rtc:', c.url); if (!url) return;
+    await run(updateChannel(id, { name, url }), 'Canal actualizado');
+  },
   async deleteChannelNow(id) {
     if (!confirm('¿Eliminar este canal? Las pantallas que lo tengan activo se quedarán sin fuente.')) return;
     await run(deleteChannel(id), 'Canal eliminado');
@@ -318,8 +324,12 @@ const actions = {
     ui.detailDeviceId = null; ui.route = 'mix'; render();
   },
   backFromMix() {
+    // Vuelve a "home", no "content" — ui.detailDeviceId (la ficha de
+    // pantalla que se estaba editando) solo lo abre viewHome(); en
+    // "content" no hace nada, así que antes se perdía y aterrizabas en
+    // Contenido en vez de volver a la pantalla de donde saliste.
     const id = ui.mixDeviceId;
-    ui.route = 'content'; ui.mixDeviceId = null; ui.mixDraft = null; ui.detailDeviceId = id; render();
+    ui.route = 'home'; ui.mixDeviceId = null; ui.mixDraft = null; ui.detailDeviceId = id; sheetEntering = true; render();
   },
   setMixLayout(layout) { ui.mixDraft.layout = layout; render(); },
   setMixText(_, el) { ui.mixDraft.text = el.value; },
@@ -536,11 +546,12 @@ document.addEventListener('input', e => {
 // SVG trazados (currentColor) en vez de los cuadros vacíos que había antes.
 const TAB_ICONS = {
   home: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="2.5" y="4" width="19" height="13" rx="2.2"/><path d="M8.5 20.5h7M12 17v3.5"/></svg>`,
+  playlists: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6h13M4 12h13M4 18h9"/><path d="M19 15l3 2-3 2v-4z" fill="currentColor" stroke="none"/></svg>`,
   content: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="2.7" y="2.7" width="8" height="8" rx="1.8"/><rect x="13.3" y="2.7" width="8" height="8" rx="1.8"/><rect x="2.7" y="13.3" width="8" height="8" rx="1.8"/><rect x="13.3" y="13.3" width="8" height="8" rx="1.8"/></svg>`,
   schedule: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9.3"/><path d="M12 7v5.2l3.6 2.1"/></svg>`,
 };
 function tabbar() {
-  const tabs = [['home', 'Pantallas', TAB_ICONS.home], ['content', 'Contenido', TAB_ICONS.content], ['schedule', 'Horarios', TAB_ICONS.schedule]];
+  const tabs = [['home', 'Pantallas', TAB_ICONS.home], ['playlists', 'Listas', TAB_ICONS.playlists], ['content', 'Contenido', TAB_ICONS.content], ['schedule', 'Horarios', TAB_ICONS.schedule]];
   return `<div class="tabbar">${tabs.map(([r, label, icon]) => `
     <button class="tab ${ui.route === r ? 'active' : ''}" ${A('goTab', r)}><div class="ico">${icon}</div><span>${label}</span></button>`).join('')}</div>`;
 }
@@ -1119,11 +1130,14 @@ function assetPreviewOverlay() {
   </div>`;
 }
 
-function viewContent() {
+// Listas de reproducción tiene su propia pestaña (antes vivía arriba de
+// Canales, dentro de Contenido) — se compone y se asigna desde acá, pero
+// sigue usando remote.assets/remote.channels (de Contenido) como
+// ingredientes, igual que antes.
+function viewPlaylists() {
   const d = ui.playlistDraft;
-  const unfoldered = remote.assets.filter(a => !a.folder);
   return `<div class="screen">
-    ${topbar('Contenido')}
+    ${topbar('Listas')}
     <div class="content">
       <div class="row" style="justify-content:space-between;align-items:baseline;margin-bottom:11px">
         <div class="eyebrow" style="margin:0">Listas de reproducción</div>
@@ -1140,7 +1154,18 @@ function viewContent() {
           <div class="row-tap" style="font:500 11px var(--sans);color:var(--red)" ${A('deletePlaylistNow', p.id)}>Eliminar</div>
         </div>`).join('')}
       </div>
+    </div>
+    ${tabbar()}
+    ${d ? playlistEditor(d) : ''}
+    ${toastHtml()}
+  </div>`;
+}
 
+function viewContent() {
+  const unfoldered = remote.assets.filter(a => !a.folder);
+  return `<div class="screen">
+    ${topbar('Contenido')}
+    <div class="content">
       <div class="row" style="justify-content:space-between;align-items:baseline;margin-bottom:11px">
         <div class="eyebrow" style="margin:0">Canales</div>
         <div class="row-tap" style="font:600 11.5px var(--sans);color:var(--accent)" ${A('newChannel')}>+ Nuevo</div>
@@ -1153,7 +1178,8 @@ function viewContent() {
               <div style="font:600 12.5px var(--sans)">${esc(c.name)}</div>
               <div style="font:400 10px var(--mono);color:var(--ink-dimmer);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${loc ? esc(loc.name) + ' · ' : ''}${esc(c.url)}</div>
             </div>
-            <div class="row-tap" title="Eliminar" ${A('deleteChannelNow', c.id)}>🗑️</div>
+            <div class="row-tap" style="font:500 11px var(--sans);color:var(--ink-dim);margin-right:12px" ${A('editChannelNow', c.id)}>Editar</div>
+            <div class="row-tap" style="font:500 11px var(--sans);color:var(--red)" ${A('deleteChannelNow', c.id)}>Eliminar</div>
           </div>`;
         }).join('')}
       </div>
@@ -1172,7 +1198,8 @@ function viewContent() {
           const count = remote.assets.filter(a => a.folder === f.id).length;
           return `<div class="row card-flat row-tap" style="padding:12px 14px" ${A('openAssetFolder', f.id)}>
             <div style="flex:1;min-width:0"><div style="font:600 12.5px var(--sans)">📁 ${esc(f.name)}</div><div style="font:400 10px var(--mono);color:var(--ink-dimmer)">${count} archivo${count === 1 ? '' : 's'}</div></div>
-            <div class="row-tap" title="Eliminar carpeta" ${A('deleteAssetFolderNow', f.id)}>🗑️</div>
+            <div class="row-tap" style="font:500 11px var(--sans);color:var(--ink-dim);margin-right:12px" ${A('editAssetFolderNow', f.id)}>Editar</div>
+            <div class="row-tap" style="font:500 11px var(--sans);color:var(--red)" ${A('deleteAssetFolderNow', f.id)}>Eliminar</div>
           </div>`;
         }).join('')}
       </div>` : ''}
@@ -1186,7 +1213,6 @@ function viewContent() {
       </div>
     </div>
     ${tabbar()}
-    ${d ? playlistEditor(d) : ''}
     ${assetPreviewOverlay()}
     ${toastHtml()}
   </div>`;
@@ -1520,6 +1546,7 @@ function render() {
   if (!ui.authed) { app.innerHTML = viewLogin(); return; }
   usersCache = usersCache; // no-op, mantiene el caché entre renders
   switch (ui.route) {
+    case 'playlists': app.innerHTML = viewPlaylists(); break;
     case 'content': app.innerHTML = viewContent(); break;
     case 'assetFolder': app.innerHTML = viewAssetFolder(); break;
     case 'schedule': app.innerHTML = viewSchedule(); break;

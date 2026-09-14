@@ -82,9 +82,11 @@ function renameAsset(id, name) { return api(`/api/assets/${id}`, { method: 'PATC
 function archiveAsset(id) { return api(`/api/assets/${id}`, { method: 'DELETE' }); }
 function listAssetFolders() { return api('/api/asset-folders'); }
 function createAssetFolder(name) { return api('/api/asset-folders', { method: 'POST', body: { name } }); }
+function renameAssetFolder(id, name) { return api(`/api/asset-folders/${id}`, { method: 'PATCH', body: { name } }); }
 function deleteAssetFolder(id) { return api(`/api/asset-folders/${id}`, { method: 'DELETE' }); }
 function listChannels() { return api('/api/channels'); }
 function createChannel(payload) { return api('/api/channels', { method: 'POST', body: payload } ); } // {name, url, location?}
+function updateChannel(id, payload) { return api(`/api/channels/${id}`, { method: 'PATCH', body: payload } ); } // {name, url}
 function deleteChannel(id) { return api(`/api/channels/${id}`, { method: 'DELETE' }); }
 function channelLiveFeedUrl(id, mode) { return `/api/channels/${id}/live-feed${mode ? `?mode=${mode}` : ''}`; }
 function setAssetFolder(assetId, folder) { return api(`/api/assets/${assetId}/folder`, { method: 'POST', body: { folder } }); } // folder:null lo saca de la carpeta
