@@ -17,7 +17,7 @@ const nameOf = value => { if (typeof value !== 'string' || !value.trim() || valu
 export function deviceManifest(db, d, origin) {
  const expand=id=>{const p=db.prepare('SELECT * FROM playlists WHERE id=? AND tenant=?').get(id,d.tenant);return p?JSON.parse(p.items).map(item=>{const a=db.prepare('SELECT * FROM assets WHERE id=? AND tenant=?').get(item.asset,d.tenant);return {id:a.id,sha:a.sha,size:a.size,type:a.type,seconds:item.seconds,url:origin+'/api/player/media/'+a.id};}):[];};
  const schedules=db.prepare('SELECT * FROM schedules WHERE device=? AND tenant=? ORDER BY priority DESC,id ASC').all(d.id,d.tenant).map(s=>({id:s.id,name:s.name,timezone:s.timezone,days:JSON.parse(s.days),start:s.start,end:s.end,fromDate:s.fromDate,toDate:s.toDate,priority:s.priority,items:expand(s.playlist)}));
- const payload={paired:true,name:d.name,paused:!!d.paused,revision:d.revision||0,display:{orientation:d.orientation||'auto',rotation:d.rotation||0,fit:d.fit||'cover'},items:expand(d.playlist),schedules};return {...payload,version:hash(JSON.stringify(payload))};
+ const payload={paired:true,name:d.name,paused:!!d.paused,revision:d.revision||0,display:{orientation:d.orientation||'auto',rotation:d.rotation||0,fit:d.fit||'cover'},liveSource:d.live_source||null,items:expand(d.playlist),schedules};return {...payload,version:hash(JSON.stringify(payload))};
 }
 export function createApp(env = process.env, studioOptions = {}) {
  const data = resolve(env.DATA_DIR || './data'), db = openStore(data), app = express();
@@ -89,11 +89,21 @@ export function createApp(env = process.env, studioOptions = {}) {
   if(db.prepare('SELECT 1 FROM devices WHERE tenant=? AND playlist=?').get(req.user.tenant,req.params.id)||db.prepare('SELECT 1 FROM schedules WHERE tenant=? AND playlist=?').get(req.user.tenant,req.params.id))throw fail(409,'La lista está asignada a una pantalla o un programa. Cambia esa asignación primero.');
   if(!db.prepare('DELETE FROM playlists WHERE id=? AND tenant=?').run(req.params.id,req.user.tenant).changes)throw fail(404,'Lista no encontrada.');res.json({ok:true});
  })));
- app.get('/api/state',admin,(req,res)=>res.json({workspaceId:req.user.tenant,tenant:req.user.name,role:req.user.role,email:req.user.email,locations:db.prepare('SELECT id,name FROM locations WHERE tenant=? ORDER BY name').all(req.user.tenant),devices:db.prepare('SELECT id,tenant,name,playlist,seen,version,error,location,paused,revision,orientation,rotation,fit FROM devices WHERE tenant=?').all(req.user.tenant).map(d=>({...d,targetVersion:deviceManifest(db,d,origin).version})),assets:db.prepare('SELECT id,name,type,size,sha FROM assets WHERE tenant=? AND archived=0').all(req.user.tenant),playlists:db.prepare('SELECT * FROM playlists WHERE tenant=?').all(req.user.tenant).map(p=>({...p,items:JSON.parse(p.items)})),schedules:db.prepare('SELECT * FROM schedules WHERE tenant=? ORDER BY start,priority DESC').all(req.user.tenant).map(s=>({...s,days:JSON.parse(s.days)}))}));
+ app.get('/api/state',admin,(req,res)=>res.json({workspaceId:req.user.tenant,tenant:req.user.name,role:req.user.role,email:req.user.email,locations:db.prepare('SELECT id,name FROM locations WHERE tenant=? ORDER BY name').all(req.user.tenant),devices:db.prepare('SELECT id,tenant,name,playlist,seen,version,error,location,paused,revision,orientation,rotation,fit,live_source AS liveSource FROM devices WHERE tenant=?').all(req.user.tenant).map(d=>({...d,targetVersion:deviceManifest(db,d,origin).version})),assets:db.prepare('SELECT id,name,type,size,sha FROM assets WHERE tenant=? AND archived=0').all(req.user.tenant),playlists:db.prepare('SELECT * FROM playlists WHERE tenant=?').all(req.user.tenant).map(p=>({...p,items:JSON.parse(p.items)})),schedules:db.prepare('SELECT * FROM schedules WHERE tenant=? ORDER BY start,priority DESC').all(req.user.tenant).map(s=>({...s,days:JSON.parse(s.days)}))}));
  app.post('/api/devices/:id/display',admin,wrap(managed('device.display',async(req,res)=>{
   const {orientation,rotation,fit}=req.body;
   if(!['auto','landscape','portrait'].includes(orientation)||![0,90,180,270].includes(rotation)||!['cover','contain'].includes(fit))throw fail(400,'Configuración de pantalla inválida.');
   if(!db.prepare('UPDATE devices SET orientation=?,rotation=?,fit=?,revision=revision+1 WHERE id=? AND tenant=?').run(orientation,rotation,fit,req.params.id,req.user.tenant).changes)throw fail(404,'Pantalla no encontrada.');
+  res.json({ok:true});
+ })));
+ // Fuente en vivo LOCAL (ej. go2rtc en la LAN del local, http://192.168.x.x:1984/stream.html?src=...).
+ // A propósito NO se valida que sea alcanzable desde el servidor — el VPS
+ // nunca la visita, solo la reparte en el manifiesto; quien la abre es el
+ // reproductor, que está en la misma LAN que esa URL.
+ app.post('/api/devices/:id/live-source',admin,wrap(managed('device.liveSource',async(req,res)=>{
+  const url=req.body.url;
+  if(url!==null&&(typeof url!=='string'||!/^https?:\/\/[^\s]{1,500}$/i.test(url)))throw fail(400,'URL inválida. Usa http:// o https://, o deja vacío para quitarla.');
+  if(!db.prepare('UPDATE devices SET live_source=?,revision=revision+1 WHERE id=? AND tenant=?').run(url,req.params.id,req.user.tenant).changes)throw fail(404,'Pantalla no encontrada.');
   res.json({ok:true});
  })));
  app.post('/api/pair/start',limit('pair-start',20),wrap(async(req,res)=>{

@@ -26,6 +26,9 @@ export function openStore(dir) {
   if(!columns.includes('orientation'))db.exec("ALTER TABLE devices ADD COLUMN orientation TEXT NOT NULL DEFAULT 'auto'");
   if(!columns.includes('rotation'))db.exec('ALTER TABLE devices ADD COLUMN rotation INTEGER NOT NULL DEFAULT 0');
   if(!columns.includes('fit'))db.exec("ALTER TABLE devices ADD COLUMN fit TEXT NOT NULL DEFAULT 'cover'");
+  // Fuente en vivo local (ej. go2rtc en la LAN del local) — reemplaza la
+  // lista mientras esté puesta. NULL = usa la lista asignada, como antes.
+  if(!columns.includes('live_source'))db.exec('ALTER TABLE devices ADD COLUMN live_source TEXT');
   if(!db.prepare('PRAGMA table_info(users)').all().some(c=>c.name==='role'))db.exec("ALTER TABLE users ADD COLUMN role TEXT NOT NULL DEFAULT 'admin'");
   if(!db.prepare('PRAGMA table_info(assets)').all().some(c=>c.name==='archived'))db.exec('ALTER TABLE assets ADD COLUMN archived INTEGER NOT NULL DEFAULT 0');
   return db;
