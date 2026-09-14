@@ -5,6 +5,8 @@ import android.graphics.SurfaceTexture;
 import android.media.MediaPlayer;
 import android.view.Surface;
 import android.view.TextureView;
+import android.webkit.WebView;
+import android.webkit.WebSettings;
 import android.app.AlertDialog;
 import android.content.Intent;
 import android.provider.Settings;
@@ -47,14 +49,20 @@ public class MainActivity extends Activity {
  private boolean playing=false,destroyed=false,paused=false;
  private final Runnable advance=()->playNext();
  private File assets;
+ // Fuente en vivo local (ej. go2rtc en la LAN del local). Viene del propio
+ // manifiesto (liveSource) — cuando está puesta, reemplaza la reproducción
+ // normal con un WebView cargando esa URL. El VPS nunca la visita, solo la
+ // reparte; este dispositivo la abre estando en la misma red que ella.
+ private volatile String liveSource="";
+ private WebView liveView;
  @Override public void onCreate(Bundle b){super.onCreate(b);
   getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
   getWindow().getDecorView().setSystemUiVisibility(View.SYSTEM_UI_FLAG_FULLSCREEN|View.SYSTEM_UI_FLAG_HIDE_NAVIGATION|View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY);
   root=new FrameLayout(this);root.setBackgroundColor(Color.BLACK);setContentView(root);root.setClipChildren(true);root.addOnLayoutChangeListener((v,l,t,r,bottom,ol,ot,or,ob)->{if(r-l!=or-ol||bottom-t!=ob-ot)layoutDisplay();});
   assets=new File(getFilesDir(),"media");assets.mkdirs();
   secret=getPreferences(0).getString("secret","");
-  try{current=new JSONObject(new String(new AtomicFile(new File(getFilesDir(),"manifest.json")).readFully(),StandardCharsets.UTF_8));version=current.getString("version");}catch(Exception ignored){}
-  if(current!=null)playNext();else{String saved=getPreferences(0).getString("pairQr","");if(!saved.isEmpty()){try{byte[] bytes=Base64.decode(saved,Base64.DEFAULT);showPair(BitmapFactory.decodeByteArray(bytes,0,bytes.length),getPreferences(0).getString("pairCode",""));}catch(Exception ignored){message("VenuePro Signage\nConectando tu pantalla…");}}else message("VenuePro Signage\nConectando tu pantalla…");}
+  try{current=new JSONObject(new String(new AtomicFile(new File(getFilesDir(),"manifest.json")).readFully(),StandardCharsets.UTF_8));version=current.getString("version");liveSource=current.optString("liveSource","");}catch(Exception ignored){}
+  if(!liveSource.isEmpty())playLive(liveSource);else if(current!=null)playNext();else{String saved=getPreferences(0).getString("pairQr","");if(!saved.isEmpty()){try{byte[] bytes=Base64.decode(saved,Base64.DEFAULT);showPair(BitmapFactory.decodeByteArray(bytes,0,bytes.length),getPreferences(0).getString("pairCode",""));}catch(Exception ignored){message("VenuePro Signage\nConectando tu pantalla…");}}else message("VenuePro Signage\nConectando tu pantalla…");}
   network.scheduleWithFixedDelay(this::sync,0,20,TimeUnit.SECONDS);
  }
  private HttpURLConnection connection(String url,String method)throws Exception{
@@ -90,8 +98,11 @@ public class MainActivity extends Activity {
     // Keep the previous manifest active until every asset verifies successfully.
     AtomicFile file=new AtomicFile(new File(getFilesDir(),"manifest.json"));FileOutputStream out=null;
     try{out=file.startWrite();out.write(next.toString().getBytes(StandardCharsets.UTF_8));file.finishWrite(out);}catch(Exception e){if(out!=null)file.failWrite(out);throw e;}
-    current=next;version=next.getString("version");lastError="";
-    ui.post(()->{sequence="";layoutDisplay();if(next.optBoolean("paused")){stopPlayback();}if(!playing&&!paused)playNext();});
+    current=next;version=next.getString("version");lastError="";liveSource=next.optString("liveSource","");
+    ui.post(()->{sequence="";layoutDisplay();
+     if(!liveSource.isEmpty())playLive(liveSource);
+     else if(next.optBoolean("paused"))stopPlayback();
+     else if(!playing&&!paused)playNext();});
    }
    request("/api/player/heartbeat",new JSONObject().put("version",version).put("error",lastError));
   }catch(Unpaired e){
@@ -123,9 +134,27 @@ public class MainActivity extends Activity {
   }
   return manifest.getJSONArray("items");
  }
- private void stopPlayback(){ui.removeCallbacks(advance);if(mediaPlayer!=null){mediaPlayer.release();mediaPlayer=null;}video=null;canvas=null;videoWidth=0;videoHeight=0;if(photo!=null){photo.setImageDrawable(null);photo=null;}playing=false;root.removeAllViews();}
+ private void stopPlayback(){ui.removeCallbacks(advance);if(mediaPlayer!=null){mediaPlayer.release();mediaPlayer=null;}video=null;canvas=null;videoWidth=0;videoHeight=0;if(photo!=null){photo.setImageDrawable(null);photo=null;}if(liveView!=null){liveView.stopLoading();liveView.destroy();liveView=null;}playing=false;root.removeAllViews();}
+ // Abre la URL de la fuente en vivo (típicamente stream.html de go2rtc en
+ // la LAN del local) en un WebView a pantalla completa. No pide permiso de
+ // cámara/micrófono: esta página SOLO recibe video del servidor, no captura
+ // nada del dispositivo.
+ // Nota: a diferencia de playNext(), esto no pasa por layoutDisplay() —
+ // el WebView ocupa toda la pantalla tal cual, sin aplicar
+ // orientación/giro/ajuste. Pendiente si hace falta para producción.
+ private void playLive(String url){
+  if(destroyed||paused)return;
+  if(liveView!=null&&url.equals(liveView.getUrl())){return;} // ya está en esa URL
+  stopPlayback();
+  liveView=new WebView(this);
+  WebSettings settings=liveView.getSettings();
+  settings.setJavaScriptEnabled(true);settings.setMediaPlaybackRequiresUserGesture(false);settings.setDomStorageEnabled(true);
+  liveView.loadUrl(url);
+  root.addView(liveView,new FrameLayout.LayoutParams(-1,-1));
+  playing=true;
+ }
  private void playNext(){
-  if(destroyed||paused)return;stopPlayback();JSONObject manifest=current;if(manifest==null)return;
+  if(destroyed||paused||!liveSource.isEmpty())return;stopPlayback();JSONObject manifest=current;if(manifest==null)return;
   try{
    if(manifest.optBoolean("paused")){message("Reproducción pausada\nReanuda desde el gestor");ui.postDelayed(advance,10000);return;}
    JSONArray list=selected(manifest);String key=list.toString();if(!key.equals(sequence)){sequence=key;index=0;}
@@ -171,6 +200,6 @@ public class MainActivity extends Activity {
  }
  @Override public boolean onKeyUp(int keyCode,KeyEvent event){if(keyCode==KeyEvent.KEYCODE_MENU){startupSettings();return true;}return super.onKeyUp(keyCode,event);}
  @Override public void onPause(){super.onPause();paused=true;stopPlayback();}
- @Override public void onResume(){super.onResume();paused=false;if(current!=null)playNext();else {String saved=getPreferences(0).getString("pairQr","");if(!saved.isEmpty()){try{byte[] bytes=Base64.decode(saved,Base64.DEFAULT);showPair(BitmapFactory.decodeByteArray(bytes,0,bytes.length),getPreferences(0).getString("pairCode",""));}catch(Exception ignored){message("Conectando…");}}else message("Conectando…");}}
+ @Override public void onResume(){super.onResume();paused=false;if(!liveSource.isEmpty())playLive(liveSource);else if(current!=null)playNext();else {String saved=getPreferences(0).getString("pairQr","");if(!saved.isEmpty()){try{byte[] bytes=Base64.decode(saved,Base64.DEFAULT);showPair(BitmapFactory.decodeByteArray(bytes,0,bytes.length),getPreferences(0).getString("pairCode",""));}catch(Exception ignored){message("Conectando…");}}else message("Conectando…");}}
  @Override public void onDestroy(){destroyed=true;network.shutdownNow();ui.removeCallbacksAndMessages(null);stopPlayback();super.onDestroy();}
 }
