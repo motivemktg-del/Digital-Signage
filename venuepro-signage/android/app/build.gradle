@@ -5,3 +5,12 @@ android {
  defaultConfig { applicationId 'cloud.venueprocrm.signage'; minSdk 26; targetSdk 35; versionCode 3; versionName '0.3.0' }
  compileOptions { sourceCompatibility JavaVersion.VERSION_17; targetCompatibility JavaVersion.VERSION_17 }
 }
+// Primera dependencia externa del proyecto (todo lo demás usa org.json y
+// APIs de la plataforma). ExoPlayer+RTSP es lo que de verdad reproduce la
+// señal en vivo casi en tiempo real (sin el buffer de varios segundos que
+// tiene el MP4 progresivo que usa el proxy del panel web) — server.js ya
+// manda liveSourceRtsp en el manifiesto cuando puede derivarla.
+dependencies {
+ implementation 'androidx.media3:media3-exoplayer:1.4.1'
+ implementation 'androidx.media3:media3-exoplayer-rtsp:1.4.1'
+}

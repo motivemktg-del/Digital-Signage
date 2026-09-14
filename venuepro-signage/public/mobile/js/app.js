@@ -770,11 +770,16 @@ function bigPreview(d) {
 }
 
 // d: el dispositivo (para saber si tiene fuente en vivo); a: primer
-// archivo de su lista, o null. No metemos un <iframe> aquí — sería uno
-// por tarjeta en una grilla, muy pesado — solo la etiqueta.
+// archivo de su lista, o null. Para la miniatura de la grilla usamos la
+// FOTO (?mode=snapshot, la misma del respaldo de Safari) en vez de video
+// en vivo de verdad — un <video>/<iframe> por tarjeta sería muy pesado
+// con varias pantallas en la grilla; una sola foto no.
 function previewThumb(d, a) {
   const s = 'width:100%;aspect-ratio:16/9;object-fit:cover;display:block;background:#000';
-  if (d.liveSource) return `<div class="thumb" style="aspect-ratio:16/9"><span style="color:var(--red);font:600 10px var(--mono);letter-spacing:.06em">● EN VIVO</span></div>`;
+  if (d.liveSource) return `<div class="thumb" style="aspect-ratio:16/9;position:relative">
+    <img src="/api/devices/${esc(d.id)}/live-feed?mode=snapshot" style="${s}" alt="señal en vivo">
+    <span style="position:absolute;bottom:6px;left:7px;color:var(--red);font:600 10px var(--mono);letter-spacing:.06em;text-shadow:0 1px 3px rgba(0,0,0,.85)">● EN VIVO</span>
+  </div>`;
   if (!a) return `<div class="thumb" style="aspect-ratio:16/9"><span>sin contenido</span></div>`;
   return a.type.startsWith('image/')
     ? `<img src="${assetMediaUrl(a.id)}" style="${s}">`

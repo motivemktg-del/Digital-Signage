@@ -14,12 +14,29 @@ const here = dirname(fileURLToPath(import.meta.url));
 const fail = (status, message) => Object.assign(new Error(message), { status });
 const wrap = fn => (req, res, next) => Promise.resolve().then(() => fn(req, res)).catch(next);
 const nameOf = value => { if (typeof value !== 'string' || !value.trim() || value.length > 120) throw fail(400, 'Nombre inválido.'); return value.trim(); };
+// El MP4 progresivo (lo que usa el proxy del panel) siempre trae varios
+// segundos de buffer — normal para un preview remoto, pero inaceptable
+// para la pantalla física de verdad. go2rtc reexpone la misma señal por
+// RTSP (mucho más cerca de tiempo real, sin ese buffer) — si la URL
+// guardada sigue el patrón .../api/stream.mp4?src=X en el puerto de la
+// API de go2rtc (1984 por defecto), se puede derivar la de RTSP
+// (puerto 8554 por defecto) sin pedirle al admin una URL aparte. El
+// reproductor Android la usa con ExoPlayer+RTSP; el panel web sigue
+// usando el proxy MP4/snapshot porque un navegador no puede abrir RTSP.
+function deriveRtspUrl(url) {
+ try {
+  const u = new URL(url);
+  const src = u.searchParams.get('src');
+  if (!src || !u.pathname.endsWith('/api/stream.mp4')) return null;
+  return `rtsp://${u.hostname}:8554/${src}`;
+ } catch { return null; }
+}
 export function deviceManifest(db, d, origin) {
  const expand=id=>{const p=db.prepare('SELECT * FROM playlists WHERE id=? AND tenant=?').get(id,d.tenant);return p?JSON.parse(p.items).map(item=>{const a=db.prepare('SELECT * FROM assets WHERE id=? AND tenant=?').get(item.asset,d.tenant);return {id:a.id,sha:a.sha,size:a.size,type:a.type,seconds:item.seconds,url:origin+'/api/player/media/'+a.id};}):[];};
  const schedules=db.prepare('SELECT * FROM schedules WHERE device=? AND tenant=? ORDER BY priority DESC,id ASC').all(d.id,d.tenant).map(s=>({id:s.id,name:s.name,timezone:s.timezone,days:JSON.parse(s.days),start:s.start,end:s.end,fromDate:s.fromDate,toDate:s.toDate,priority:s.priority,items:expand(s.playlist)}));
  const assetUrl=id=>{const a=id&&db.prepare('SELECT * FROM assets WHERE id=? AND tenant=?').get(id,d.tenant);return a?origin+'/api/player/media/'+a.id:null;};
  const mixOut=()=>{if(!d.mix)return null;const m=JSON.parse(d.mix);return {...m,promoUrl:assetUrl(m.promo),logoUrl:assetUrl(m.logo)};};
- const payload={paired:true,name:d.name,paused:!!d.paused,revision:d.revision||0,display:{orientation:d.orientation||'auto',rotation:d.rotation||0,fit:d.fit||'cover'},liveSource:d.live_source||null,mix:mixOut(),items:expand(d.playlist),schedules};return {...payload,version:hash(JSON.stringify(payload))};
+ const payload={paired:true,name:d.name,paused:!!d.paused,revision:d.revision||0,display:{orientation:d.orientation||'auto',rotation:d.rotation||0,fit:d.fit||'cover'},liveSource:d.live_source||null,liveSourceRtsp:d.live_source?deriveRtspUrl(d.live_source):null,mix:mixOut(),items:expand(d.playlist),schedules};return {...payload,version:hash(JSON.stringify(payload))};
 }
 // Trae una URL de video (MJPEG/MP4 — cualquier respuesta HTTP simple, sin
 // sub-recursos ni WebSocket) y la repite tal cual al navegador, como si

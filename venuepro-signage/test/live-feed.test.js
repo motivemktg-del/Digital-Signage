@@ -4,7 +4,7 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createServer } from 'node:http';
-import { createApp } from '../server.js';
+import { createApp, deviceManifest } from '../server.js';
 import { password } from '../store.js';
 
 // Simula una cámara/go2rtc real: un servidor HTTP aparte que devuelve un
@@ -86,6 +86,12 @@ test('Proxy de video en vivo (/live-feed): mismo origen, sin exponer la URL de l
     assert.equal(snapshot.status, 200);
     assert.equal(snapshot.headers.get('content-type'), 'image/jpeg');
     assert.equal(snapshot.buf.toString(), 'fake-jpeg-bytes');
+
+    // El manifiesto que consume la APK trae la URL RTSP derivada (mucho
+    // menos buffer que el MP4 progresivo que usa el proxy del panel)
+    const dev = db.prepare('SELECT * FROM devices WHERE id=?').get(deviceId);
+    const manifest = deviceManifest(db, dev, 'http://localhost:3080');
+    assert.equal(manifest.liveSourceRtsp, 'rtsp://127.0.0.1:8554/mivideo'); // 8554 = puerto RTSP fijo de go2rtc, no el de la API
     go2rtc.close();
 
     // Si la cámara está caída, el proxy responde 502 (no cuelga ni revienta)

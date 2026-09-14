@@ -41,6 +41,7 @@ public class MainActivity extends Activity {
  private int index=0;
  private TextureView video;
  private MediaPlayer mediaPlayer;
+ private androidx.media3.exoplayer.ExoPlayer exoPlayer;
  private FrameLayout canvas;
  private int videoWidth=0,videoHeight=0;
  private ImageView photo;
@@ -49,13 +50,13 @@ public class MainActivity extends Activity {
  private File assets;
  // Fuente en vivo local (ej. go2rtc en la LAN del local, o vía Tailscale si
  // el dispositivo está unido al mismo tailnet). Viene del propio manifiesto
- // (liveSource) — cuando está puesta, reemplaza la reproducción normal.
- // Es un endpoint de VIDEO puro (ej. .../api/stream.mp4 de go2rtc), así que
- // se reproduce con el mismo MediaPlayer+TextureView que el video local,
- // no con un WebView — el VPS nunca la visita, solo la reparte; este
- // dispositivo la abre estando en la misma red que ella (o el mismo
- // tailnet).
- private volatile String liveSource="";
+ // (liveSource) — cuando está puesta, reemplaza la reproducción normal. El
+ // VPS nunca la visita, solo la reparte; este dispositivo la abre estando
+ // en la misma red que ella (o el mismo tailnet).
+ // liveSourceRtsp: la misma señal pero por RTSP (server.js la deriva sola
+ // cuando puede) — se prioriza sobre liveSource porque no tiene el buffer
+ // de varios segundos del MP4 progresivo.
+ private volatile String liveSource="",liveSourceRtsp="";
  private String livePlayingUrl="";
  @Override public void onCreate(Bundle b){super.onCreate(b);
   getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
@@ -63,7 +64,7 @@ public class MainActivity extends Activity {
   root=new FrameLayout(this);root.setBackgroundColor(Color.BLACK);setContentView(root);root.setClipChildren(true);root.addOnLayoutChangeListener((v,l,t,r,bottom,ol,ot,or,ob)->{if(r-l!=or-ol||bottom-t!=ob-ot)layoutDisplay();});
   assets=new File(getFilesDir(),"media");assets.mkdirs();
   secret=getPreferences(0).getString("secret","");
-  try{current=new JSONObject(new String(new AtomicFile(new File(getFilesDir(),"manifest.json")).readFully(),StandardCharsets.UTF_8));version=current.getString("version");liveSource=current.optString("liveSource","");}catch(Exception ignored){}
+  try{current=new JSONObject(new String(new AtomicFile(new File(getFilesDir(),"manifest.json")).readFully(),StandardCharsets.UTF_8));version=current.getString("version");liveSource=current.optString("liveSource","");liveSourceRtsp=current.optString("liveSourceRtsp","");}catch(Exception ignored){}
   if(!liveSource.isEmpty())playLive(liveSource);else if(current!=null)playNext();else{String saved=getPreferences(0).getString("pairQr","");if(!saved.isEmpty()){try{byte[] bytes=Base64.decode(saved,Base64.DEFAULT);showPair(BitmapFactory.decodeByteArray(bytes,0,bytes.length),getPreferences(0).getString("pairCode",""));}catch(Exception ignored){message("VenuePro Signage\nConectando tu pantalla…");}}else message("VenuePro Signage\nConectando tu pantalla…");}
   network.scheduleWithFixedDelay(this::sync,0,20,TimeUnit.SECONDS);
  }
@@ -100,7 +101,7 @@ public class MainActivity extends Activity {
     // Keep the previous manifest active until every asset verifies successfully.
     AtomicFile file=new AtomicFile(new File(getFilesDir(),"manifest.json"));FileOutputStream out=null;
     try{out=file.startWrite();out.write(next.toString().getBytes(StandardCharsets.UTF_8));file.finishWrite(out);}catch(Exception e){if(out!=null)file.failWrite(out);throw e;}
-    current=next;version=next.getString("version");lastError="";liveSource=next.optString("liveSource","");
+    current=next;version=next.getString("version");lastError="";liveSource=next.optString("liveSource","");liveSourceRtsp=next.optString("liveSourceRtsp","");
     ui.post(()->{sequence="";layoutDisplay();
      if(!liveSource.isEmpty())playLive(liveSource);
      else if(next.optBoolean("paused"))stopPlayback();
@@ -136,15 +137,15 @@ public class MainActivity extends Activity {
   }
   return manifest.getJSONArray("items");
  }
- private void stopPlayback(){ui.removeCallbacks(advance);if(mediaPlayer!=null){mediaPlayer.release();mediaPlayer=null;}video=null;canvas=null;videoWidth=0;videoHeight=0;if(photo!=null){photo.setImageDrawable(null);photo=null;}livePlayingUrl="";playing=false;root.removeAllViews();}
- // Reproduce la fuente en vivo directo de la LAN (o el mismo tailnet, si
- // aplica) con el mismo MediaPlayer+TextureView que el video local — antes
- // era un WebView (pensado para páginas tipo stream.html), pero
- // live_source ahora es un endpoint de VIDEO puro (ej. .../api/stream.mp4
- // de go2rtc), así que se reproduce igual que cualquier otro video, con
- // orientación/ajuste aplicados por layoutDisplay() como el resto.
+ private void stopPlayback(){ui.removeCallbacks(advance);if(mediaPlayer!=null){mediaPlayer.release();mediaPlayer=null;}if(exoPlayer!=null){exoPlayer.release();exoPlayer=null;}video=null;canvas=null;videoWidth=0;videoHeight=0;if(photo!=null){photo.setImageDrawable(null);photo=null;}livePlayingUrl="";playing=false;root.removeAllViews();}
+ // Si el manifiesto trae liveSourceRtsp (go2rtc), se usa ESA — RTSP no
+ // tiene el buffer de varios segundos del MP4 progresivo (el que usa el
+ // proxy del panel web, pensado para navegadores que no pueden abrir
+ // RTSP directo). Si no hay RTSP derivable (fuente en vivo genérica, no
+ // go2rtc), cae al MediaPlayer+MP4 de siempre.
  private void playLive(String url){
   if(destroyed||paused)return;
+  if(!liveSourceRtsp.isEmpty()){playLiveRtsp(liveSourceRtsp);return;}
   if(url.equals(livePlayingUrl))return; // ya está en esa URL
   stopPlayback();
   livePlayingUrl=url;playing=true;
@@ -166,6 +167,34 @@ public class MainActivity extends Activity {
    public boolean onSurfaceTextureDestroyed(SurfaceTexture texture){return true;}
    public void onSurfaceTextureUpdated(SurfaceTexture texture){}
   });
+ }
+ // ExoPlayer sobre RTSP-TCP (más confiable detrás de NAT/firewall que UDP,
+ // el costo de latencia es mínimo) — esto sí es tiempo casi real.
+ @androidx.media3.common.util.UnstableApi
+ private void playLiveRtsp(String rtspUrl){
+  if(destroyed||paused)return;
+  if(rtspUrl.equals(livePlayingUrl))return; // ya está en esa URL
+  stopPlayback();
+  livePlayingUrl=rtspUrl;playing=true;
+  canvas=new FrameLayout(this);canvas.setClipChildren(true);root.addView(canvas);layoutDisplay();
+  video=new TextureView(this);canvas.addView(video,new FrameLayout.LayoutParams(-1,-1,Gravity.CENTER));
+  final androidx.media3.exoplayer.ExoPlayer player=new androidx.media3.exoplayer.ExoPlayer.Builder(this).build();
+  exoPlayer=player;
+  player.setVideoTextureView(video);
+  androidx.media3.exoplayer.source.MediaSource source=new androidx.media3.exoplayer.rtsp.RtspMediaSource.Factory()
+   .setForceUseRtpTcp(true)
+   .createMediaSource(androidx.media3.common.MediaItem.fromUri(rtspUrl));
+  player.setMediaSource(source);
+  player.addListener(new androidx.media3.common.Player.Listener(){
+   @Override public void onVideoSizeChanged(androidx.media3.common.VideoSize size){videoWidth=size.width;videoHeight=size.height;layoutDisplay();}
+   @Override public void onPlayerError(androidx.media3.common.PlaybackException error){
+    if(player!=exoPlayer)return;
+    lastError="Señal en vivo interrumpida, reintentando…";livePlayingUrl="";
+    ui.postDelayed(()->{if(rtspUrl.equals(liveSourceRtsp))playLiveRtsp(rtspUrl);},2000);
+   }
+  });
+  player.setPlayWhenReady(true);
+  player.prepare();
  }
  private void playNext(){
   if(destroyed||paused||!liveSource.isEmpty())return;stopPlayback();JSONObject manifest=current;if(manifest==null)return;
