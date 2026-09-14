@@ -1387,18 +1387,21 @@ function viewPair() {
       <div style="font:400 12px/1.5 var(--sans);color:var(--ink-dim);margin-bottom:14px">La TV física muestra su propio QR y código al encenderse sin emparejar. Escanéalo con la cámara o escríbelo abajo.</div>
       <div id="qr-reader" style="border-radius:14px;overflow:hidden;margin-bottom:12px;min-height:0"></div>
       <div class="btn btn-ghost row-tap" id="qr-toggle" style="margin-bottom:16px" ${A('toggleScanner')}>Abrir cámara</div>
-      <form data-submit="confirmPair">
+      ${remote.locations.length === 0 ? `<div class="row card-flat row-tap" style="padding:11px 14px" ${A('addLocation')}>
+        <div style="flex:1;min-width:0"><div style="font:600 12.5px var(--sans);margin-bottom:2px">Crea una ubicación primero</div><div style="font:400 10.5px var(--mono);color:var(--ink-dimmer)">toda TV vive dentro de una ubicación</div></div>
+      </div>` : `<form data-submit="confirmPair">
         <div class="stack">
           <input id="qr-code-field" name="code" required placeholder="Código (ej. ABC123DEF456)" style="padding:12px 14px;border-radius:12px;background:var(--card-2);border:1px solid var(--line);color:var(--ink);text-transform:uppercase">
           <input name="name" required placeholder="Nombre (ej. Barra 01)" style="padding:12px 14px;border-radius:12px;background:var(--card-2);border:1px solid var(--line);color:var(--ink)">
-          <select name="location" style="padding:12px 14px;border-radius:12px;background:var(--card-2);border:1px solid var(--line);color:var(--ink)">
-            <option value="">Sin ubicación</option>
+          <select name="location" required style="padding:12px 14px;border-radius:12px;background:var(--card-2);border:1px solid var(--line);color:var(--ink)">
+            <option value="" disabled selected>Elegir ubicación…</option>
             ${remote.locations.map(l => `<option value="${esc(l.id)}">${esc(l.name)}</option>`).join('')}
           </select>
           <button type="submit" class="btn btn-primary" style="border:none;margin-top:6px">Confirmar emparejamiento</button>
         </div>
-      </form>
+      </form>`}
     </div>
+    ${ui.locationDraft ? locationEditor(ui.locationDraft) : ''}
     ${toastHtml()}
   </div>`;
 }
