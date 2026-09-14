@@ -724,7 +724,11 @@ function deviceRow(d) {
 // "Canal ONVIF" u otra señal externa), este mismo cuadro sería donde se
 // mostraría ese stream — es el hueco que se deja para eso.
 function bigPreview(d) {
-  const box = 'width:100%;aspect-ratio:9/16;max-height:340px;border-radius:14px;overflow:hidden;background:repeating-linear-gradient(135deg,#242830 0 7px,#1c1f25 7px 14px);display:flex;align-items:center;justify-content:center;margin-bottom:14px;position:relative';
+  // Proporción según la orientación configurada de la pantalla — la
+  // mayoría de TVs de bar/restaurante son horizontales (16:9); solo las
+  // que se configuraron explícitamente en vertical usan 9:16.
+  const ratio = d.orientation === 'portrait' ? '9/16' : '16/9';
+  const box = `width:100%;aspect-ratio:${ratio};max-height:340px;border-radius:14px;overflow:hidden;background:repeating-linear-gradient(135deg,#242830 0 7px,#1c1f25 7px 14px);display:flex;align-items:center;justify-content:center;margin-bottom:14px;position:relative`;
   // Fuente en vivo real (backend): si el dispositivo tiene live_source
   // asignado, esta ventana muestra ESE stream — el navegador de quien mira
   // el panel tiene que poder llegar a esa URL (misma LAN, o vía un túnel
