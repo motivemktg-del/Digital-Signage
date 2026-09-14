@@ -58,8 +58,28 @@ test('Cámaras PTZ: aislamiento por tenant, presets y buzón de comandos', async
     assert.equal(cam.command.type, 'nudge');
     assert.equal(cam.command_seq, 1);
 
+    // "Enviar a las pantallas" — sin viewUrl configurada, rechaza
+    assert.equal((await req(`/api/ptz-cameras/${camId}/send-to-screens`, { cookie: a, method: 'POST' })).status, 409);
+
+    // Con viewUrl y una ubicación con pantallas, la pone como live_source en todas
+    const loc = (await req('/api/locations', { cookie: a, body: { name: 'Salón' } })).data;
+    await req(`/api/ptz-cameras/${camId}`, { cookie: a, method: 'DELETE' }); // limpiar la de arriba (sin ubicación)
+    const cam2 = (await req('/api/ptz-cameras', { cookie: a, body: { name: 'PTZ Salón', location: loc.id, viewUrl: 'http://192.168.1.10:1984/stream.html?src=ptz1' } })).data;
+    const pair = (await req('/api/pair/start', { method: 'POST' })).data;
+    await req('/api/pair/claim', { cookie: a, body: { code: pair.code, name: 'TV Salón 1', location: loc.id } });
+    const pair2 = (await req('/api/pair/start', { method: 'POST' })).data;
+    await req('/api/pair/claim', { cookie: a, body: { code: pair2.code, name: 'TV sin ubicación' } });
+
+    assert.equal((await req(`/api/ptz-cameras/${cam2.id}/send-to-screens`, { cookie: b, method: 'POST' })).status, 404); // otro tenant
+    const sent = await req(`/api/ptz-cameras/${cam2.id}/send-to-screens`, { cookie: a, method: 'POST' });
+    assert.equal(sent.status, 200);
+    assert.equal(sent.data.applied, 1); // solo la pantalla de esa ubicación
+    const devices = (await req('/api/state', { cookie: a })).data.devices;
+    assert.equal(devices.find(d => d.name === 'TV Salón 1').liveSource, 'http://192.168.1.10:1984/stream.html?src=ptz1');
+    assert.equal(devices.find(d => d.name === 'TV sin ubicación').liveSource, null);
+
     // Borrar la cámara
-    assert.equal((await req(`/api/ptz-cameras/${camId}`, { cookie: a, method: 'DELETE' })).status, 200);
+    assert.equal((await req(`/api/ptz-cameras/${cam2.id}`, { cookie: a, method: 'DELETE' })).status, 200);
     assert.equal((await req('/api/ptz-cameras', { cookie: a })).data.length, 0);
   } finally {
     server.close(); await rm(dir, { recursive: true, force: true });

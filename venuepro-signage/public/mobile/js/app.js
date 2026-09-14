@@ -9,6 +9,8 @@ const ui = {
   toast: null,
   detailDeviceId: null,
   currentLocationId: null, // ubicación abierta en viewLocationDetail
+  currentFolderId: null,   // carpeta de biblioteca abierta en viewAssetFolder
+  previewAssetId: null,    // asset mostrado a pantalla completa (lightbox)
   playlistDraft: null, // { id, name, items:[{asset,seconds}] } al crear/editar lista
   scheduleDraft: null, // objeto de horario al crear/editar
   studioConfig: null,   // resultado de getStudioConfig(), null = sin cargar aún
@@ -103,8 +105,9 @@ const actions = {
   async addPtzCamera(locationId) {
     const name = prompt('Nombre de la cámara (ej. PTZ Escenario):'); if (!name) return;
     const onvifUrl = prompt('URL ONVIF (xAddr) — ej. http://192.168.1.41/onvif/device_service. Déjalo vacío si no la tienes aún:') || null;
-    const rtspUrl = prompt('URL RTSP del video (opcional):') || null;
-    await run(createPtzCamera({ name, location: locationId, onvifUrl, rtspUrl }), 'Cámara agregada');
+    const rtspUrl = prompt('URL RTSP del video (opcional, para el agente local):') || null;
+    const viewUrl = prompt('URL de video visible en navegador (ej. http://192.168.1.10:1984/stream.html?src=ptz1 de go2rtc) — es lo que se manda a las pantallas con "Enviar a las pantallas". Déjalo vacío si no la tienes aún:') || null;
+    await run(createPtzCamera({ name, location: locationId, onvifUrl, rtspUrl, viewUrl }), 'Cámara agregada');
   },
   async deletePtzCameraNow(id) {
     if (!confirm('¿Eliminar esta cámara PTZ?')) return;
@@ -112,9 +115,26 @@ const actions = {
   },
   openPtz(camId) {
     ui.ptzCameraId = camId; ui.ptzLocal = { x: 0, y: 0, zoom: 1, presetId: null };
-    ui.route = 'ptz'; render();
+    ui.detailDeviceId = null; ui.route = 'ptz'; render();
+  },
+  // Desde la ficha de pantalla: si su ubicación tiene una sola cámara PTZ
+  // la abre directo; si tiene varias, va a la ubicación a elegir.
+  openPtzFromDevice(deviceId) {
+    const d = remote.devices.find(x => x.id === deviceId); if (!d || !d.location) return;
+    const cams = remote.ptzCameras.filter(c => c.location === d.location);
+    if (cams.length === 0) return;
+    if (cams.length === 1) actions.openPtz(cams[0].id);
+    else actions.openLocation(d.location);
   },
   backFromPtz() { ui.route = 'locationDetail'; render(); },
+  async sendPtzToScreensNow() {
+    const cam = remote.ptzCameras.find(c => c.id === ui.ptzCameraId); if (!cam) return;
+    if (!cam.view_url) return showToast('Configura primero la URL de video (viewUrl) de esta cámara', true);
+    const n = remote.devices.filter(d => d.location === cam.location).length;
+    if (n === 0) return showToast('Esta ubicación no tiene pantallas', true);
+    if (!confirm(`¿Mostrar "${cam.name}" en vivo en las ${n} pantalla(s) de esta ubicación?`)) return;
+    await run(sendPtzToScreens(cam.id), `Enviada a ${n} pantalla(s)`);
+  },
   ptzNudge(dir) {
     const s = ui.ptzLocal; s.presetId = null;
     const dx = dir === 'left' ? -8 : dir === 'right' ? 8 : 0, dy = dir === 'up' ? -6 : dir === 'down' ? 6 : 0;
@@ -356,6 +376,34 @@ const actions = {
     if (!confirm('¿Archivar este archivo? No podrás usarlo en listas nuevas.')) return;
     await run(archiveAsset(id), 'Archivado');
   },
+  openAssetPreview(id) { ui.previewAssetId = id; render(); },
+  closeAssetPreview() { ui.previewAssetId = null; render(); },
+
+  // -- carpetas de biblioteca (solo agrupan, no mueven el archivo real) --
+  async newAssetFolder() {
+    const name = prompt('Nombre de la carpeta (ej. Promociones, Menú):'); if (!name) return;
+    await run(createAssetFolder(name), 'Carpeta creada');
+  },
+  async deleteAssetFolderNow(id) {
+    const f = (remote.assetFolders || []).find(f => f.id === id);
+    if (!confirm(`¿Eliminar la carpeta "${f ? f.name : ''}"? Debe estar vacía.`)) return;
+    await run(deleteAssetFolder(id), 'Carpeta eliminada');
+  },
+  openAssetFolder(id) { ui.currentFolderId = id; ui.route = 'assetFolder'; render(); },
+  backFromAssetFolder() { ui.route = 'content'; ui.currentFolderId = null; render(); },
+  async addAssetToFolder(_, select) {
+    if (!select.value) return;
+    await run(setAssetFolder(select.value, ui.currentFolderId), 'Archivo movido a la carpeta');
+    select.value = '';
+  },
+  async removeAssetFromFolderNow(id) {
+    await run(setAssetFolder(id, null), 'Archivo movido a "Sin carpeta"');
+  },
+  async moveAssetToFolderNow(assetId, select) {
+    if (!select.value) return;
+    await run(setAssetFolder(assetId, select.value), 'Archivo movido a la carpeta');
+    select.value = '';
+  },
   newPlaylist() { ui.playlistDraft = { id: null, name: '', items: [] }; render(); },
   editPlaylist(id) {
     const p = remote.playlists.find(p => p.id === id); if (!p) return;
@@ -592,7 +640,7 @@ function viewPtz() {
       <div style="font:400 10px var(--mono);color:var(--ink-faint);margin-bottom:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${cam.onvif_url ? 'ONVIF · ' + esc(cam.onvif_url) : 'Sin URL ONVIF configurada todavía'}</div>
 
       <div style="position:relative;aspect-ratio:16/9;border-radius:14px;overflow:hidden;background:repeating-linear-gradient(135deg,#242830 0 7px,#1c1f25 7px 14px);margin-bottom:7px">
-        <div style="position:absolute;inset:0;display:flex;align-items:center;justify-content:center;font:500 10px var(--mono);color:var(--ink-faint);text-align:center;padding:0 16px">${cam.rtsp_url ? 'preview en vivo: próximamente (RTSP configurado)' : 'sin URL de video configurada'}</div>
+        ${cam.view_url ? `<iframe src="${esc(cam.view_url)}" allow="autoplay" style="position:absolute;inset:0;width:100%;height:100%;border:0" title="video PTZ"></iframe><div class="badge-live" style="position:absolute;top:10px;left:10px"><div class="dot dot-sm" style="background:var(--red)"></div><span>EN DIRECTO</span></div>` : `<div style="position:absolute;inset:0;display:flex;align-items:center;justify-content:center;font:500 10px var(--mono);color:var(--ink-faint);text-align:center;padding:0 16px">sin URL de video configurada</div>`}
         <div style="position:absolute;top:50%;left:50%;width:${frameW};height:${frameW};border:1.5px solid rgba(47,123,246,.85);border-radius:6px;box-shadow:0 0 0 9999px rgba(14,15,18,.45);transform:translate(-50%,-50%) translate(${s.x}px,${s.y}px);transition:all .22s cubic-bezier(.22,.9,.3,1)"></div>
         <div style="position:absolute;bottom:11px;right:11px;padding:4px 9px;border-radius:6px;background:rgba(14,15,18,.84);font:600 9.5px var(--mono);color:#c4c9cf">${s.zoom.toFixed(1)}×</div>
       </div>
@@ -633,6 +681,21 @@ function viewPtz() {
           </div>
         </div>
       </div>
+
+      ${(() => {
+        const siblings = remote.ptzCameras.filter(c => c.location === cam.location);
+        if (siblings.length < 2) return '';
+        return `<div class="eyebrow" style="margin-top:20px">Cámaras del local</div>
+        <div class="row" style="gap:8px;flex-wrap:wrap;margin-bottom:6px">
+          ${siblings.map(c => `<div class="row-tap" style="padding:8px 12px;border-radius:10px;background:${c.id === cam.id ? 'rgba(47,123,246,.12)' : 'var(--card-2)'};border:1.5px solid ${c.id === cam.id ? 'var(--accent)' : 'var(--line)'};display:flex;align-items:center;gap:6px" ${A('openPtz', c.id)}>
+            <div class="dot dot-sm" style="background:${c.view_url ? 'var(--red)' : 'var(--ink-faint)'}"></div>
+            <span style="font:600 11.5px var(--sans)">${esc(c.name)}</span>
+          </div>`).join('')}
+        </div>`;
+      })()}
+
+      <div class="btn btn-primary row-tap" style="margin-top:14px" ${A('sendPtzToScreensNow')}>Enviar a las pantallas</div>
+      ${!cam.view_url ? `<div style="font:400 10px var(--mono);color:var(--ink-faint);text-align:center;margin-top:6px">Falta configurar la URL de video de esta cámara</div>` : ''}
     </div>
     ${toastHtml()}
   </div>`;
@@ -835,7 +898,8 @@ function deviceSheet() {
         ${d.liveSource ? `<div class="tag" style="background:rgba(242,99,90,.14);color:var(--red)">EN DIRECTO</div>` : ''}
       </div>
     </div>
-    ${d.liveSource ? `<div class="row-tap" style="text-align:center;padding:10px 0;border-radius:12px;background:${d.mix ? 'rgba(47,123,246,.12)' : 'var(--card-2)'};border:1px solid ${d.mix ? 'var(--accent)' : 'var(--line)'};font:600 12px var(--sans);margin-bottom:16px" ${A('openMix', d.id)}>🎛️ ${d.mix ? 'Editar mezcla' : 'Mezclar sobre la señal'}</div>` : ''}
+    ${d.liveSource ? `<div class="row-tap" style="text-align:center;padding:10px 0;border-radius:12px;background:${d.mix ? 'rgba(47,123,246,.12)' : 'var(--card-2)'};border:1px solid ${d.mix ? 'var(--accent)' : 'var(--line)'};font:600 12px var(--sans);margin-bottom:10px" ${A('openMix', d.id)}>🎛️ ${d.mix ? 'Editar mezcla' : 'Mezclar sobre la señal'}</div>` : ''}
+    ${remote.ptzCameras.some(c => c.location === d.location) ? `<div class="row-tap" style="text-align:center;padding:10px 0;border-radius:12px;background:var(--card-2);border:1px solid var(--line);font:600 12px var(--sans);margin-bottom:16px" ${A('openPtzFromDevice', d.id)}>📹 Control PTZ</div>` : ''}
 
     <div class="eyebrow">Lista de reproducción</div>
     <div class="row" style="gap:8px;margin-bottom:16px">
@@ -926,46 +990,59 @@ actions.toggleScanner = async function () {
 
 // ---- Contenido (assets + listas) ---------------------------------------------
 
+// Tarjeta de archivo — miniatura clicable (abre el lightbox a tamaño real)
+// + ✏️/🗑️ y, si se pasa folderless=true, un botón 📁 para archivarlo en
+// una carpeta (solo tiene sentido en la grilla "sin carpeta").
+function assetCard(a, { showMoveToFolder } = {}) {
+  return `<div class="card" style="overflow:hidden">
+    <div class="row-tap" ${A('openAssetPreview', a.id)}>
+      ${a.type.startsWith('image/')
+        ? `<img src="${assetMediaUrl(a.id)}" style="width:100%;aspect-ratio:16/9;object-fit:cover;display:block;background:#000">`
+        : `<video src="${assetMediaUrl(a.id)}#t=0.5" preload="metadata" muted playsinline style="width:100%;aspect-ratio:16/9;object-fit:cover;display:block;background:#000"></video>`}
+    </div>
+    <div style="padding:9px 10px">
+      <div style="font:600 12px var(--sans);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;margin-bottom:6px">${esc(a.name)}</div>
+      <div class="row" style="gap:8px">
+        <div class="row-tap" title="Renombrar" ${A('renameAsset', a.id)}>✏️</div>
+        ${showMoveToFolder ? `<select data-change="moveAssetToFolderNow" data-arg="${esc(a.id)}" style="font:400 10px var(--mono);background:var(--card-2);color:var(--ink-dimmer);border:1px solid var(--line);border-radius:6px;padding:2px 4px">
+          <option value="">📁 mover…</option>
+          ${(remote.assetFolders || []).map(f => `<option value="${esc(f.id)}">${esc(f.name)}</option>`).join('')}
+        </select>` : `<div class="row-tap" title="Quitar de la carpeta" ${A('removeAssetFromFolderNow', a.id)}>📁↩</div>`}
+        <div class="row-tap" title="Archivar" style="margin-left:auto" ${A('archiveAsset', a.id)}>🗑️</div>
+      </div>
+    </div>
+  </div>`;
+}
+
+// Lightbox a pantalla completa — la imagen/video se ve en su proporción
+// real (object-fit:contain), nunca recortada a un cuadrado como en la
+// miniatura de la grilla.
+function assetPreviewOverlay() {
+  const a = ui.previewAssetId && remote.assets.find(x => x.id === ui.previewAssetId);
+  if (!a) return '';
+  const media = a.type.startsWith('image/')
+    ? `<img src="${assetMediaUrl(a.id)}" style="max-width:100%;max-height:100%;object-fit:contain;border-radius:10px;display:block">`
+    : `<video src="${assetMediaUrl(a.id)}" controls autoplay playsinline style="max-width:100%;max-height:100%;object-fit:contain;border-radius:10px;display:block"></video>`;
+  return `<div class="backdrop" style="background:rgba(6,7,9,.92);z-index:40" ${A('closeAssetPreview')}></div>
+  <div style="position:fixed;inset:0;z-index:41;display:flex;align-items:center;justify-content:center;padding:28px;pointer-events:none">
+    <div style="pointer-events:auto;max-width:100%;max-height:100%;position:relative">
+      ${media}
+      <div class="row-tap" title="Cerrar" style="position:absolute;top:-16px;right:-16px;width:32px;height:32px;border-radius:50%;background:var(--card);border:1px solid var(--line);display:flex;align-items:center;justify-content:center;font:600 14px var(--sans)" ${A('closeAssetPreview')}>✕</div>
+    </div>
+  </div>`;
+}
+
 function viewContent() {
   const d = ui.playlistDraft;
+  const unfoldered = remote.assets.filter(a => !a.folder);
   return `<div class="screen">
     ${topbar('Contenido')}
     <div class="content">
-      <div class="eyebrow">Biblioteca</div>
-      <div class="row" style="gap:8px;margin-bottom:14px">
-        <label class="btn btn-ghost" style="flex:1;text-align:center;cursor:pointer;font-size:12.5px">
-          + Subir archivo
-          <input type="file" accept="image/jpeg,image/png,image/webp,video/mp4" style="display:none" data-change="pickUpload">
-        </label>
-        <div class="row-tap" style="flex:1;text-align:center;padding:12px 0;border-radius:14px;background:var(--card-2);border:1px solid var(--line);opacity:.5;font:600 12.5px var(--sans)" ${A('onvifSoon')}>+ Canal ONVIF</div>
-      </div>
-      <div style="font:400 10.5px var(--mono);color:var(--ink-faint);margin:-8px 0 14px">Canal ONVIF: próximamente — necesita cambios en el backend real y en el reproductor.</div>
-
-      <div class="row row-tap card-flat" style="padding:12px 13px;margin-bottom:20px" ${A('goStudio')}>
-        <div style="flex:1;min-width:0"><div style="font:600 12.5px var(--sans)">🎨 Estudio IA</div><div style="font:400 10.5px var(--mono);color:var(--ink-dimmer)">Generar un fondo de poster con OpenAI</div></div>
-        <div style="color:var(--ink-faint);font:400 13px var(--sans)">›</div>
-      </div>
-      <div class="grid-2" style="margin-bottom:20px">
-        ${remote.assets.length === 0 ? `<div style="grid-column:1/-1;padding:24px 0;text-align:center;color:var(--ink-faint);font:400 12px var(--sans)">Sin archivos todavía.</div>` : remote.assets.map(a => `
-        <div class="card" style="overflow:hidden">
-          ${a.type.startsWith('image/')
-            ? `<img src="${assetMediaUrl(a.id)}" style="width:100%;aspect-ratio:16/9;object-fit:cover;display:block;background:#000">`
-            : `<video src="${assetMediaUrl(a.id)}#t=0.5" preload="metadata" muted playsinline style="width:100%;aspect-ratio:16/9;object-fit:cover;display:block;background:#000"></video>`}
-          <div style="padding:9px 10px">
-            <div style="font:600 12px var(--sans);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;margin-bottom:6px">${esc(a.name)}</div>
-            <div class="row" style="gap:8px">
-              <div class="row-tap" title="Renombrar" ${A('renameAsset', a.id)}>✏️</div>
-              <div class="row-tap" title="Archivar" style="margin-left:auto" ${A('archiveAsset', a.id)}>🗑️</div>
-            </div>
-          </div>
-        </div>`).join('')}
-      </div>
-
       <div class="row" style="justify-content:space-between;align-items:baseline;margin-bottom:11px">
         <div class="eyebrow" style="margin:0">Listas de reproducción</div>
         <div class="row-tap" style="font:600 11.5px var(--sans);color:var(--accent)" ${A('newPlaylist')}>+ Nueva</div>
       </div>
-      <div class="stack">
+      <div class="stack" style="margin-bottom:22px">
         ${remote.playlists.length === 0 ? `<div style="padding:16px 0;text-align:center;color:var(--ink-faint);font:400 12px var(--sans)">Sin listas todavía.</div>` : remote.playlists.map(p => `
         <div class="card row" style="padding:12px 14px">
           <div style="flex:1;min-width:0">
@@ -976,9 +1053,60 @@ function viewContent() {
           <div class="row-tap" style="font:500 11px var(--sans);color:var(--red)" ${A('deletePlaylistNow', p.id)}>Eliminar</div>
         </div>`).join('')}
       </div>
+
+      <div class="eyebrow">Biblioteca</div>
+      <div class="row" style="gap:8px;margin-bottom:8px">
+        <label class="btn btn-ghost" style="flex:1;text-align:center;cursor:pointer;font-size:12.5px">
+          + Subir archivo
+          <input type="file" accept="image/jpeg,image/png,image/webp,video/mp4" style="display:none" data-change="pickUpload">
+        </label>
+        <div class="row-tap" style="flex:1;text-align:center;padding:12px 0;border-radius:14px;background:var(--card-2);border:1px solid var(--line);font:600 12.5px var(--sans)" ${A('newAssetFolder')}>📁+ Nueva carpeta</div>
+      </div>
+      <div class="row-tap" style="text-align:center;padding:12px 0;border-radius:14px;background:var(--card-2);border:1px solid var(--line);opacity:.5;font:600 12.5px var(--sans);margin-bottom:6px" ${A('onvifSoon')}>+ Canal ONVIF</div>
+      <div style="font:400 10.5px var(--mono);color:var(--ink-faint);margin-bottom:14px">Canal ONVIF: próximamente — necesita cambios en el backend real y en el reproductor.</div>
+
+      ${(remote.assetFolders || []).length > 0 ? `<div class="stack" style="margin-bottom:16px">
+        ${remote.assetFolders.map(f => {
+          const count = remote.assets.filter(a => a.folder === f.id).length;
+          return `<div class="row card-flat row-tap" style="padding:12px 14px" ${A('openAssetFolder', f.id)}>
+            <div style="flex:1;min-width:0"><div style="font:600 12.5px var(--sans)">📁 ${esc(f.name)}</div><div style="font:400 10px var(--mono);color:var(--ink-dimmer)">${count} archivo${count === 1 ? '' : 's'}</div></div>
+            <div class="row-tap" title="Eliminar carpeta" ${A('deleteAssetFolderNow', f.id)}>🗑️</div>
+          </div>`;
+        }).join('')}
+      </div>` : ''}
+
+      <div class="row row-tap card-flat" style="padding:12px 13px;margin-bottom:20px" ${A('goStudio')}>
+        <div style="flex:1;min-width:0"><div style="font:600 12.5px var(--sans)">🎨 Estudio IA</div><div style="font:400 10.5px var(--mono);color:var(--ink-dimmer)">Generar un fondo de poster con OpenAI</div></div>
+        <div style="color:var(--ink-faint);font:400 13px var(--sans)">›</div>
+      </div>
+      <div class="grid-2" style="margin-bottom:20px">
+        ${unfoldered.length === 0 ? `<div style="grid-column:1/-1;padding:24px 0;text-align:center;color:var(--ink-faint);font:400 12px var(--sans)">Sin archivos todavía.</div>` : unfoldered.map(a => assetCard(a, { showMoveToFolder: true })).join('')}
+      </div>
     </div>
     ${tabbar()}
     ${d ? playlistEditor(d) : ''}
+    ${assetPreviewOverlay()}
+    ${toastHtml()}
+  </div>`;
+}
+
+function viewAssetFolder() {
+  const f = (remote.assetFolders || []).find(f => f.id === ui.currentFolderId);
+  if (!f) return `<div class="screen"><div class="topbar"><div class="back" ${A('backFromAssetFolder')}>‹</div></div><div class="content" style="padding-top:30px;text-align:center;color:var(--ink-faint)">Carpeta no encontrada.</div></div>`;
+  const items = remote.assets.filter(a => a.folder === f.id);
+  const available = remote.assets.filter(a => a.folder !== f.id);
+  return `<div class="screen">
+    <div class="topbar"><div class="back" ${A('backFromAssetFolder')}>‹</div><div class="title">📁 ${esc(f.name)}</div></div>
+    <div class="content">
+      <select data-change="addAssetToFolder" style="width:100%;padding:11px;border-radius:10px;background:var(--card-2);border:1px solid var(--line);color:var(--ink);margin-bottom:16px">
+        <option value="">+ Agregar archivo a esta carpeta…</option>
+        ${available.map(a => `<option value="${esc(a.id)}">${esc(a.name)}</option>`).join('')}
+      </select>
+      <div class="grid-2">
+        ${items.length === 0 ? `<div style="grid-column:1/-1;padding:24px 0;text-align:center;color:var(--ink-faint);font:400 12px var(--sans)">Carpeta vacía — agrega archivos arriba.</div>` : items.map(a => assetCard(a)).join('')}
+      </div>
+    </div>
+    ${assetPreviewOverlay()}
     ${toastHtml()}
   </div>`;
 }
@@ -1264,6 +1392,7 @@ function render() {
   usersCache = usersCache; // no-op, mantiene el caché entre renders
   switch (ui.route) {
     case 'content': app.innerHTML = viewContent(); break;
+    case 'assetFolder': app.innerHTML = viewAssetFolder(); break;
     case 'schedule': app.innerHTML = viewSchedule(); break;
     case 'team': app.innerHTML = viewTeam(); break;
     case 'pair': app.innerHTML = viewPair(); break;

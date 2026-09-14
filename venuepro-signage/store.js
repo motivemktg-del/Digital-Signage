@@ -36,6 +36,10 @@ export function openStore(dir) {
   if(!columns.includes('mix'))db.exec('ALTER TABLE devices ADD COLUMN mix TEXT');
   if(!db.prepare('PRAGMA table_info(users)').all().some(c=>c.name==='role'))db.exec("ALTER TABLE users ADD COLUMN role TEXT NOT NULL DEFAULT 'admin'");
   if(!db.prepare('PRAGMA table_info(assets)').all().some(c=>c.name==='archived'))db.exec('ALTER TABLE assets ADD COLUMN archived INTEGER NOT NULL DEFAULT 0');
+  // Carpetas para organizar la biblioteca (solo agrupan — no cambian dónde
+  // se guarda el archivo). NULL = "sin carpeta", como estaba antes.
+  db.exec('CREATE TABLE IF NOT EXISTS asset_folders (id TEXT PRIMARY KEY, tenant TEXT NOT NULL REFERENCES tenants(id), name TEXT NOT NULL)');
+  if(!db.prepare('PRAGMA table_info(assets)').all().some(c=>c.name==='folder'))db.exec('ALTER TABLE assets ADD COLUMN folder TEXT REFERENCES asset_folders(id)');
   // Cámaras PTZ de una ubicación. "command"/"command_seq" son un buzón: la
   // API solo GUARDA la última intención (mover/preset/zoom) con un número
   // de secuencia que sube cada vez — el agente local (todavía no existe)
@@ -47,6 +51,10 @@ export function openStore(dir) {
     onvif_url TEXT, rtsp_url TEXT, presets TEXT NOT NULL DEFAULT '[]',
     command TEXT, command_seq INTEGER NOT NULL DEFAULT 0, updated INTEGER
   )`);
+  // view_url: URL http(s) visible en navegador (típicamente stream.html de
+  // go2rtc) para "Enviar a las pantallas" — onvif_url/rtsp_url son para el
+  // agente local, no se pueden abrir en un <iframe>.
+  if(!db.prepare('PRAGMA table_info(ptz_cameras)').all().some(c=>c.name==='view_url'))db.exec('ALTER TABLE ptz_cameras ADD COLUMN view_url TEXT');
   // Plantillas de mezcla reutilizables (layout + texto + logo + promo ya
   // armados) para no rehacer la combinación cada vez — ver el bloque de
   // /api/devices/:id/mix en server.js para el formato exacto de cada campo.

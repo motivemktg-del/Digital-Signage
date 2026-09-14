@@ -40,8 +40,9 @@ function deleteStudioDraft(id) { return api(`/api/studio/drafts/${id}`, { method
 
 // ---- cámaras PTZ (backend real — ver PLAYER_SPEC.md para el mapeo a ONVIF) --
 function listPtzCameras() { return api('/api/ptz-cameras'); }
-function createPtzCamera(payload) { return api('/api/ptz-cameras', { method: 'POST', body: payload } ); } // {name, location, onvifUrl, rtspUrl}
+function createPtzCamera(payload) { return api('/api/ptz-cameras', { method: 'POST', body: payload } ); } // {name, location, onvifUrl, rtspUrl, viewUrl}
 function deletePtzCamera(id) { return api(`/api/ptz-cameras/${id}`, { method: 'DELETE' }); }
+function sendPtzToScreens(id) { return api(`/api/ptz-cameras/${id}/send-to-screens`, { method: 'POST' }); }
 function savePtzPreset(camId, preset) { return api(`/api/ptz-cameras/${camId}/presets`, { method: 'POST', body: preset } ); } // {label,pan,tilt,zoom}
 function deletePtzPreset(camId, presetId) { return api(`/api/ptz-cameras/${camId}/presets/${presetId}`, { method: 'DELETE' }); }
 function sendPtzCommand(camId, type, payload) { return api(`/api/ptz-cameras/${camId}/command`, { method: 'POST', body: { type, payload } }); }
@@ -78,6 +79,10 @@ function uploadAsset(file) {
 }
 function renameAsset(id, name) { return api(`/api/assets/${id}`, { method: 'PATCH', body: { name } }); }
 function archiveAsset(id) { return api(`/api/assets/${id}`, { method: 'DELETE' }); }
+function listAssetFolders() { return api('/api/asset-folders'); }
+function createAssetFolder(name) { return api('/api/asset-folders', { method: 'POST', body: { name } }); }
+function deleteAssetFolder(id) { return api(`/api/asset-folders/${id}`, { method: 'DELETE' }); }
+function setAssetFolder(assetId, folder) { return api(`/api/assets/${assetId}/folder`, { method: 'POST', body: { folder } }); } // folder:null lo saca de la carpeta
 function assetMediaUrl(id) { return `/api/assets/${id}/media`; } // <img>/<video> same-origin, manda cookie sola
 
 // ---- listas de reproducción -----------------------------------------------
