@@ -54,6 +54,7 @@ function assignPlaylist(deviceId, playlist) { return api(`/api/devices/${deviceI
 function publishContent(deviceId, payload) { return api(`/api/devices/${deviceId}/content`, { method: 'POST', body: { ...payload, confirm: true } }); }
 function revokeDevice(id) { return api(`/api/devices/${id}`, { method: 'DELETE' }); }
 function setLiveSource(id, url) { return api(`/api/devices/${id}/live-source`, { method: 'POST', body: { url } }); } // url:null quita la fuente en vivo
+function setLiveChannel(id, channel) { return api(`/api/devices/${id}/live-channel`, { method: 'POST', body: { channel } }); } // channel:null apaga; se identifica por id, no por URL (evita que 2 canales con la misma URL se vean "prendidos" juntos)
 function setMix(id, payload) { return api(`/api/devices/${id}/mix`, { method: 'POST', body: payload }); } // {layout,promo,logo,text,muted}
 function clearMix(id) { return api(`/api/devices/${id}/mix`, { method: 'POST', body: { clear: true } }); }
 function listMixTemplates() { return api('/api/mix-templates'); }

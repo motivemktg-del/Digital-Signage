@@ -300,8 +300,11 @@ const actions = {
     const d = remote.devices.find(d => d.id === deviceId);
     const c = remote.channels.find(c => c.id === channelId);
     if (!d || !c) return;
-    const on = d.liveSource === c.url;
-    await run(setLiveSource(deviceId, on ? null : c.url), on ? 'Canal apagado' : 'Canal activado');
+    // Por id, no por URL — si dos canales llegaran a compartir la misma
+    // URL (viejos, de antes de bloquear eso al crear), comparar por URL
+    // los mostraría "prendidos" juntos. El id nunca se repite.
+    const on = d.liveChannel === c.id;
+    await run(setLiveChannel(deviceId, on ? null : c.id), on ? 'Canal apagado' : 'Canal activado');
   },
   // -- mezclador (backend real: layout+texto+logo+promo sobre la señal en
   // vivo, ver /api/devices/:id/mix en server.js) --
@@ -970,7 +973,8 @@ function deviceSheet() {
           <div style="flex:1;min-width:0"><div style="font:600 13px var(--sans);margin-bottom:2px">Sin canales</div><div style="font:400 10.5px var(--mono);color:var(--ink-dimmer)">configúralos en Contenido → Canales</div></div>
         </div>`;
         return chans.map(c => {
-          const on = d.liveSource === c.url;
+          // Por id, no por URL — ver comentario en toggleChannel().
+          const on = d.liveChannel === c.id;
           return `<div class="row card-flat row-tap" style="padding:13px 14px;background:${on ? 'rgba(47,123,246,.12)' : 'var(--card-2)'};border:1.5px solid ${on ? 'var(--accent)' : 'var(--line)'}" ${A('toggleChannel', `${d.id}:${c.id}`)}>
             <div style="flex:1;min-width:0"><div style="font:600 13px var(--sans);margin-bottom:2px">${esc(c.name)}</div>${on ? `<div class="tag" style="background:rgba(242,99,90,.14);color:var(--red);display:inline-block">EN DIRECTO</div>` : ''}</div>
             <div style="width:44px;height:26px;border-radius:13px;background:${on ? 'var(--accent)' : 'var(--card-2)'};border:1px solid var(--line);position:relative;flex:none">

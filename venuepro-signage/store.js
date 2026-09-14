@@ -75,5 +75,18 @@ export function openStore(dir) {
     id TEXT PRIMARY KEY, tenant TEXT NOT NULL REFERENCES tenants(id),
     location TEXT REFERENCES locations(id), name TEXT NOT NULL, url TEXT NOT NULL
   )`);
+  // Qué CANAL (por id, no por URL) está prendido como fuente en vivo de
+  // esta pantalla — NULL si ninguno. Antes el switch de cada canal se
+  // decidía comparando live_source contra la URL del canal; si dos
+  // canales llegaban a compartir la misma URL (canales viejos, creados
+  // antes de bloquear eso al crear) ambos se mostraban "prendidos" a la
+  // vez, violando la regla de que solo puede haber uno encendido.
+  // Guardar el id en vez de comparar URLs lo hace imposible sin importar
+  // qué URL tenga cada canal. SIN REFERENCES a propósito, igual que
+  // live_source: borrar un canal no debe fallar aunque una pantalla lo
+  // tenga activo (queda "huérfano" mostrando la última señal, ver
+  // DELETE /api/channels/:id) — una FK real lo bloquearía con una
+  // violación de integridad.
+  if(!columns.includes('live_channel'))db.exec('ALTER TABLE devices ADD COLUMN live_channel TEXT');
   return db;
 }

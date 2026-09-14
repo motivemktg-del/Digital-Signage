@@ -168,7 +168,7 @@ export function createApp(env = process.env, studioOptions = {}) {
   if(db.prepare('SELECT 1 FROM devices WHERE tenant=? AND playlist=?').get(req.user.tenant,req.params.id)||db.prepare('SELECT 1 FROM schedules WHERE tenant=? AND playlist=?').get(req.user.tenant,req.params.id))throw fail(409,'La lista está asignada a una pantalla o un programa. Cambia esa asignación primero.');
   if(!db.prepare('DELETE FROM playlists WHERE id=? AND tenant=?').run(req.params.id,req.user.tenant).changes)throw fail(404,'Lista no encontrada.');res.json({ok:true});
  })));
- app.get('/api/state',admin,(req,res)=>res.json({workspaceId:req.user.tenant,tenant:req.user.name,role:req.user.role,email:req.user.email,locations:db.prepare('SELECT id,name FROM locations WHERE tenant=? ORDER BY name').all(req.user.tenant),devices:db.prepare('SELECT id,tenant,name,playlist,seen,version,error,location,paused,revision,orientation,rotation,fit,live_source AS liveSource,live_source_saved AS liveSourceSaved,mix FROM devices WHERE tenant=?').all(req.user.tenant).map(d=>({...d,mix:d.mix?JSON.parse(d.mix):null,targetVersion:deviceManifest(db,d,origin).version})),assets:db.prepare('SELECT id,name,type,size,sha,folder FROM assets WHERE tenant=? AND archived=0').all(req.user.tenant),assetFolders:db.prepare('SELECT * FROM asset_folders WHERE tenant=? ORDER BY name').all(req.user.tenant),playlists:db.prepare('SELECT * FROM playlists WHERE tenant=?').all(req.user.tenant).map(p=>({...p,items:JSON.parse(p.items)})),schedules:db.prepare('SELECT * FROM schedules WHERE tenant=? ORDER BY start,priority DESC').all(req.user.tenant).map(s=>({...s,days:JSON.parse(s.days)})),ptzCameras:db.prepare('SELECT * FROM ptz_cameras WHERE tenant=?').all(req.user.tenant).map(ptzOut),mixTemplates:db.prepare('SELECT * FROM mix_templates WHERE tenant=? ORDER BY name').all(req.user.tenant).map(t=>({...t,muted:!!t.muted})),channels:db.prepare('SELECT * FROM channels WHERE tenant=? ORDER BY name').all(req.user.tenant)}));
+ app.get('/api/state',admin,(req,res)=>res.json({workspaceId:req.user.tenant,tenant:req.user.name,role:req.user.role,email:req.user.email,locations:db.prepare('SELECT id,name FROM locations WHERE tenant=? ORDER BY name').all(req.user.tenant),devices:db.prepare('SELECT id,tenant,name,playlist,seen,version,error,location,paused,revision,orientation,rotation,fit,live_source AS liveSource,live_source_saved AS liveSourceSaved,live_channel AS liveChannel,mix FROM devices WHERE tenant=?').all(req.user.tenant).map(d=>({...d,mix:d.mix?JSON.parse(d.mix):null,targetVersion:deviceManifest(db,d,origin).version})),assets:db.prepare('SELECT id,name,type,size,sha,folder FROM assets WHERE tenant=? AND archived=0').all(req.user.tenant),assetFolders:db.prepare('SELECT * FROM asset_folders WHERE tenant=? ORDER BY name').all(req.user.tenant),playlists:db.prepare('SELECT * FROM playlists WHERE tenant=?').all(req.user.tenant).map(p=>({...p,items:JSON.parse(p.items)})),schedules:db.prepare('SELECT * FROM schedules WHERE tenant=? ORDER BY start,priority DESC').all(req.user.tenant).map(s=>({...s,days:JSON.parse(s.days)})),ptzCameras:db.prepare('SELECT * FROM ptz_cameras WHERE tenant=?').all(req.user.tenant).map(ptzOut),mixTemplates:db.prepare('SELECT * FROM mix_templates WHERE tenant=? ORDER BY name').all(req.user.tenant).map(t=>({...t,muted:!!t.muted})),channels:db.prepare('SELECT * FROM channels WHERE tenant=? ORDER BY name').all(req.user.tenant)}));
  app.post('/api/devices/:id/display',admin,wrap(managed('device.display',async(req,res)=>{
   const {orientation,rotation,fit}=req.body;
   if(!['auto','landscape','portrait'].includes(orientation)||![0,90,180,270].includes(rotation)||!['cover','contain'].includes(fit))throw fail(400,'Configuración de pantalla inválida.');
@@ -184,10 +184,33 @@ export function createApp(env = process.env, studioOptions = {}) {
   if(url!==null&&(typeof url!=='string'||!/^https?:\/\/[^\s]{1,500}$/i.test(url)))throw fail(400,'URL inválida. Usa http:// o https://, o deja vacío para quitarla.');
   // live_source_saved recuerda la última URL real puesta (aunque ahora se
   // quite y live_source quede en NULL) — así reactivar no obliga a
-  // volver a escribirla desde cero.
+  // volver a escribirla desde cero. live_channel se limpia siempre acá:
+  // esta ruta pone una URL suelta, no un canal identificado por id (para
+  // eso está /live-channel) — dejar un live_channel viejo apuntando a
+  // otra cosa rompería "cuál canal está prendido de verdad".
   const changes=url!==null
-   ?db.prepare('UPDATE devices SET live_source=?,live_source_saved=?,mix=NULL,revision=revision+1 WHERE id=? AND tenant=?').run(url,url,req.params.id,req.user.tenant).changes
-   :db.prepare('UPDATE devices SET live_source=?,mix=NULL,revision=revision+1 WHERE id=? AND tenant=?').run(url,req.params.id,req.user.tenant).changes;
+   ?db.prepare('UPDATE devices SET live_source=?,live_source_saved=?,live_channel=NULL,mix=NULL,revision=revision+1 WHERE id=? AND tenant=?').run(url,url,req.params.id,req.user.tenant).changes
+   :db.prepare('UPDATE devices SET live_source=?,live_channel=NULL,mix=NULL,revision=revision+1 WHERE id=? AND tenant=?').run(url,req.params.id,req.user.tenant).changes;
+  if(!changes)throw fail(404,'Pantalla no encontrada.');
+  res.json({ok:true});
+ })));
+ // Prender/apagar un Canal por ID (lo que usa el switch de Fuente en la
+ // ficha) — a propósito NO compara URLs: si dos canales llegaran a tener
+ // la misma URL (viejos, de antes de bloquear eso al crear), comparar por
+ // URL los haría indistinguibles y ambos se verían "prendidos" a la vez.
+ // Guardar el id hace esa ambigüedad imposible sin importar la URL.
+ app.post('/api/devices/:id/live-channel',admin,wrap(managed('device.liveChannel',async(req,res)=>{
+  const channelId=req.body.channel;
+  let url=null;
+  if(channelId!==null){
+   if(typeof channelId!=='string')throw fail(400,'Canal inválido.');
+   const c=db.prepare('SELECT * FROM channels WHERE id=? AND tenant=?').get(channelId,req.user.tenant);
+   if(!c)throw fail(404,'Canal no encontrado.');
+   url=c.url;
+  }
+  const changes=url!==null
+   ?db.prepare('UPDATE devices SET live_source=?,live_source_saved=?,live_channel=?,mix=NULL,revision=revision+1 WHERE id=? AND tenant=?').run(url,url,channelId,req.params.id,req.user.tenant).changes
+   :db.prepare('UPDATE devices SET live_source=NULL,live_channel=NULL,mix=NULL,revision=revision+1 WHERE id=? AND tenant=?').run(req.params.id,req.user.tenant).changes;
   if(!changes)throw fail(404,'Pantalla no encontrada.');
   res.json({ok:true});
  })));
