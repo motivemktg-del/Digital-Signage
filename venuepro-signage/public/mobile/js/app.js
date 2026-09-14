@@ -9,7 +9,8 @@ const ui = {
   toast: null,
   detailDeviceId: null,
   deviceMoreOpen: false, // "Ubicación" + "Pantalla" en la ficha van juntas en un solo colapsable, arranca cerrado
-  currentLocationId: null, // ubicación abierta en viewLocationDetail
+  currentLocationId: null, // ubicación abierta en viewLocationDetail (null = "Sin ubicación", un grupo real, no "ninguna")
+  locationSourceChannel: null, // canal elegido en el selector de Fuente de viewLocationDetail — solo decide qué se previsualiza/resalta, no prende nada solo
   currentFolderId: null,   // carpeta de biblioteca abierta en viewAssetFolder
   previewAssetId: null,    // asset mostrado a pantalla completa (lightbox)
   playlistDraft: null, // { id, name, items:[{asset,seconds}|{channel,seconds}] } al crear/editar lista
@@ -109,8 +110,8 @@ const actions = {
   },
   async syncNow(id) { await run(syncDevice(id), 'Sincronización solicitada'); },
   async revoke(id) {
-    if (!confirm('¿Quitar esta pantalla? Tendrás que emparejarla de nuevo.')) return;
-    ui.detailDeviceId = null; await run(revokeDevice(id), 'Pantalla eliminada');
+    if (!confirm('¿Quitar esta TV? Tendrás que emparejarla de nuevo.')) return;
+    ui.detailDeviceId = null; await run(revokeDevice(id), 'TV eliminada');
   },
   async assignPlaylistTo(id, select) {
     const sel = select.closest('.row').querySelector('select');
@@ -121,7 +122,7 @@ const actions = {
     const orientation = wrap.querySelector('[name=orientation]').value;
     const rotation = Number(wrap.querySelector('[name=rotation]').value);
     const fit = wrap.querySelector('[name=fit]').value;
-    await run(setDeviceDisplay(id, { orientation, rotation, fit }), 'Pantalla actualizada');
+    await run(setDeviceDisplay(id, { orientation, rotation, fit }), 'TV actualizada');
   },
   async moveDevice(id, select) {
     await run(setDeviceLocation(id, select.value || null), 'Ubicación actualizada');
@@ -145,7 +146,6 @@ const actions = {
     ui.locationDraft = null;
     await run(deleteLocation(id), 'Ubicación eliminada');
   },
-  goLocations() { ui.route = 'locations'; render(); },
 
   // -- cámaras PTZ (backend real; sin agente local todavía, ver PLAYER_SPEC.md) --
   addPtzCamera(locationId) {
@@ -188,9 +188,9 @@ const actions = {
     const cam = remote.ptzCameras.find(c => c.id === ui.ptzCameraId); if (!cam) return;
     if (!cam.view_url) return showToast('Configura primero la URL de video (viewUrl) de esta cámara', true);
     const n = remote.devices.filter(d => d.location === cam.location).length;
-    if (n === 0) return showToast('Esta ubicación no tiene pantallas', true);
-    if (!confirm(`¿Mostrar "${cam.name}" en vivo en las ${n} pantalla(s) de esta ubicación?`)) return;
-    await run(sendPtzToScreens(cam.id), `Enviada a ${n} pantalla(s)`);
+    if (n === 0) return showToast('Esta ubicación no tiene TVs', true);
+    if (!confirm(`¿Mostrar "${cam.name}" en vivo en las ${n} TV(s) de esta ubicación?`)) return;
+    await run(sendPtzToScreens(cam.id), `Enviada a ${n} TV(s)`);
   },
   ptzNudge(dir) {
     const s = ui.ptzLocal; s.presetId = null;
@@ -226,7 +226,37 @@ const actions = {
     if (!confirm('¿Eliminar este encuadre guardado?')) return;
     await run(deletePtzPreset(ui.ptzCameraId, presetId), 'Encuadre eliminado');
   },
-  openLocation(id) { ui.currentLocationId = id; ui.route = 'locationDetail'; render(); },
+  openLocation(id) { ui.currentLocationId = id; ui.locationSourceChannel = null; ui.route = 'locationDetail'; render(); },
+  // "Sin ubicación" no es una fila real de la tabla locations — no tiene
+  // id para pasarle a openLocation() (A() convertiría null en '' y
+  // rompería el filtro d.location===loc.id, que sí necesita null real).
+  openUnassignedLocation() { ui.currentLocationId = null; ui.locationSourceChannel = null; ui.route = 'locationDetail'; render(); },
+  // Cambiar de fuente en esta vista NO toca ningún TV todavía — solo
+  // decide qué fuente se está mirando/configurando (el preview grande y
+  // qué TVs se resaltan en la grilla). Tocar una TV abajo sí actúa de una.
+  // data-change llama fn(el.dataset.arg, el) siempre — este <select> no
+  // tiene data-arg, así que el primer parámetro llega vacío a propósito;
+  // el elemento real (para leer .value) es el SEGUNDO, igual que
+  // setDeviceSource(id, select) más abajo.
+  setLocationSourcePreview(_, select) { ui.locationSourceChannel = select.value || null; render(); },
+  // Tocar una TV en la grilla de una fuente: si ya tiene ESA fuente
+  // prendida, la apaga (vuelve a su lista); si no, la prende — mismo
+  // comando que el <select> de Fuente en la ficha de la TV, solo que
+  // desde el otro sentido (fuente → elegir TVs, en vez de TV → elegir fuente).
+  async toggleDeviceChannel(arg) {
+    const [deviceId, channelId] = arg.split(':');
+    const d = remote.devices.find(x => x.id === deviceId);
+    const on = d && d.liveChannel === channelId;
+    await run(setLiveChannel(deviceId, on ? null : channelId), on ? 'Volviendo a la lista' : 'Fuente activada');
+  },
+  // Mezclar desde la vista de fuente: sin una TV puntual seleccionada (acá
+  // se trabaja por fuente, no por TV), se abre el editor sobre la PRIMERA
+  // TV con esa fuente activa — mismo mix que ya existe, ver openMix().
+  openMixForChannel(channelId) {
+    const d = remote.devices.find(x => x.liveChannel === channelId);
+    if (!d) return showToast('Ninguna TV tiene esta fuente activa todavía', true);
+    actions.openMix(d.id);
+  },
 
   // -- estudio IA --
   async goStudio() {
@@ -344,7 +374,7 @@ const actions = {
     await run(id ? updateChannel(id, { name, url }) : createChannel({ name, url }), id ? 'Canal actualizado' : 'Canal creado');
   },
   async deleteChannelFromEditor() {
-    if (!confirm('¿Eliminar este canal? Las pantallas que lo tengan activo se quedarán sin fuente.')) return;
+    if (!confirm('¿Eliminar este canal? Las TVs que lo tengan activo se quedarán sin fuente.')) return;
     const id = ui.channelDraft.id;
     ui.channelDraft = null;
     await run(deleteChannel(id), 'Canal eliminado');
@@ -393,7 +423,7 @@ const actions = {
   setMixFadeMs(_, el) { ui.mixDraft.fadeMs = Number(el.value); render(); },
   async saveMixNow() { await run(setMix(ui.mixDeviceId, mixDraftPayload(ui.mixDraft)), 'Mezcla guardada'); },
   async clearMixNow() {
-    if (!confirm('¿Quitar la mezcla de esta pantalla?')) return;
+    if (!confirm('¿Quitar la mezcla de esta TV?')) return;
     ui.mixDraft = newMixDraft();
     await run(clearMix(ui.mixDeviceId), 'Mezcla quitada');
   },
@@ -429,19 +459,19 @@ const actions = {
     const t = (remote.mixTemplates || []).find(t => t.id === id); if (!t) return;
     const d = remote.devices.find(d => d.id === ui.mixDeviceId);
     const location = d ? d.location : null;
-    if (!location) return showToast('Esta pantalla no tiene ubicación asignada', true);
+    if (!location) return showToast('Esta TV no tiene ubicación asignada', true);
     const loc = remote.locations.find(l => l.id === location);
     const n = remote.devices.filter(x => x.location === location && x.liveSource).length;
-    if (n === 0) return showToast('Ninguna pantalla de esta ubicación tiene señal en vivo', true);
-    if (!confirm(`¿Aplicar "${t.name}" a las ${n} pantalla(s) con señal en vivo de "${loc ? loc.name : 'esta ubicación'}"?`)) return;
-    await run(applyMixTemplateToAll(id, location), `Aplicada a ${n} pantalla(s)`);
+    if (n === 0) return showToast('Ninguna TV de esta ubicación tiene señal en vivo', true);
+    if (!confirm(`¿Aplicar "${t.name}" a las ${n} TV(s) con señal en vivo de "${loc ? loc.name : 'esta ubicación'}"?`)) return;
+    await run(applyMixTemplateToAll(id, location), `Aplicada a ${n} TV(s)`);
   },
   async applyMixTemplateToAllNow(id) {
     const t = (remote.mixTemplates || []).find(t => t.id === id); if (!t) return;
     const n = remote.devices.filter(x => x.liveSource).length;
-    if (n === 0) return showToast('Ninguna de tus pantallas tiene señal en vivo', true);
-    if (!confirm(`¿Aplicar "${t.name}" a TODAS tus pantallas con señal en vivo (${n})?`)) return;
-    await run(applyMixTemplateToAll(id, null), `Aplicada a ${n} pantalla(s)`);
+    if (n === 0) return showToast('Ninguna de tus TVs tiene señal en vivo', true);
+    if (!confirm(`¿Aplicar "${t.name}" a TODAS tus TVs con señal en vivo (${n})?`)) return;
+    await run(applyMixTemplateToAll(id, null), `Aplicada a ${n} TV(s)`);
   },
   // -- alerta de emergencia (backend real: ver /api/devices/:id/alert y
   // /api/alerts/broadcast en server.js) — a diferencia del mezclador,
@@ -457,18 +487,18 @@ const actions = {
   },
   async broadcastAlertNow() {
     const n = remote.devices.length;
-    if (n === 0) return showToast('No tienes pantallas todavía', true);
-    const text = prompt(`Texto de la alerta para TODAS tus pantallas (${n}):`); if (!text) return;
+    if (n === 0) return showToast('No tienes TVs todavía', true);
+    const text = prompt(`Texto de la alerta para TODAS tus TVs (${n}):`); if (!text) return;
     const level = (prompt('Nivel: info / warning / critical', 'warning') || '').trim().toLowerCase();
     if (!['info', 'warning', 'critical'].includes(level)) return showToast('Nivel inválido — usa info, warning o critical', true);
-    if (!confirm(`¿Enviar esta alerta a las ${n} pantalla(s)?`)) return;
+    if (!confirm(`¿Enviar esta alerta a las ${n} TV(s)?`)) return;
     const res = await run(broadcastAlert({ text, level, location: null }), null);
-    if (res) showToast(`Alerta enviada a ${res.applied} pantalla(s)`);
+    if (res) showToast(`Alerta enviada a ${res.applied} TV(s)`);
   },
   async clearAllAlertsNow() {
-    if (!confirm('¿Quitar la alerta de TODAS tus pantallas?')) return;
+    if (!confirm('¿Quitar la alerta de TODAS tus TVs?')) return;
     const res = await run(clearAllAlerts(null), null);
-    if (res) showToast(`Alerta quitada de ${res.applied} pantalla(s)`);
+    if (res) showToast(`Alerta quitada de ${res.applied} TV(s)`);
   },
   // -- emparejar --
   // El código lo genera la PANTALLA (la TV/tablet llama a /api/pair/start
@@ -480,7 +510,7 @@ const actions = {
     const code = f.code.value.trim(), name = f.name.value.trim(), location = f.location.value || null;
     try {
       await pairClaim(code, name, location);
-      stopScanner(); showToast('Pantalla vinculada'); ui.route = 'home'; await refresh();
+      stopScanner(); showToast('TV vinculada'); ui.route = 'home'; await refresh();
     } catch (e) { showToast(e.message, true); }
   },
   cancelPair() { stopScanner(); ui.route = 'home'; render(); },
@@ -615,7 +645,42 @@ const actions = {
   }
 };
 
+// Mantener presionado (data-longpress) — para la grilla de TVs: un toque
+// corto prende/apaga la fuente, mantener presionado abre la ficha completa
+// de esa TV. Genérico por si hace falta en otro lado después. Se cancela
+// solo si el dedo se mueve más de ~10px (para no disparar durante un
+// scroll) o se suelta antes de tiempo; si SÍ dispara, se marca
+// longPressFired para que el click que sigue (el navegador siempre manda
+// uno al soltar) no dispare TAMBIÉN la acción corta de data-action.
+let longPressTimer = null, longPressFired = false, longPressStart = null;
+function cancelLongPress() { if (longPressTimer) { clearTimeout(longPressTimer); longPressTimer = null; } longPressStart = null; }
+document.addEventListener('pointerdown', e => {
+  const el = e.target.closest('[data-longpress]');
+  if (!el) return;
+  longPressStart = { x: e.clientX, y: e.clientY };
+  longPressTimer = setTimeout(() => {
+    longPressTimer = null; longPressFired = true;
+    const fn = actions[el.dataset.longpress];
+    // Arg PROPIO (data-longpress-arg), no data-arg — un mismo elemento
+    // puede tener data-action (toque corto) y data-longpress (mantener
+    // presionado) a la vez, cada uno con su arg distinto (ver deviceTile);
+    // si compartieran data-arg, el HTML solo se queda con el PRIMER valor
+    // que aparece en el string y el otro gesto lee el arg equivocado.
+    if (fn) fn(el.dataset.longpressArg, el);
+    if (navigator.vibrate) navigator.vibrate(12);
+  }, 480);
+});
+document.addEventListener('pointerup', cancelLongPress);
+document.addEventListener('pointercancel', cancelLongPress);
+document.addEventListener('pointermove', e => {
+  if (!longPressStart) return;
+  if (Math.hypot(e.clientX - longPressStart.x, e.clientY - longPressStart.y) > 10) cancelLongPress();
+});
+// Suprime el menú contextual (guardar imagen, etc.) que Android/iOS abren
+// solo al mantener presionada una <img> — chocaría con el long-press de arriba.
+document.addEventListener('contextmenu', e => { if (e.target.closest('[data-longpress]')) e.preventDefault(); });
 document.addEventListener('click', e => {
+  if (longPressFired) { longPressFired = false; e.preventDefault(); e.stopPropagation(); return; }
   const el = e.target.closest('[data-action]');
   if (!el) return;
   const fn = actions[el.dataset.action];
@@ -653,7 +718,7 @@ const TAB_ICONS = {
   schedule: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9.3"/><path d="M12 7v5.2l3.6 2.1"/></svg>`,
 };
 function tabbar() {
-  const tabs = [['home', 'Pantallas', TAB_ICONS.home], ['playlists', 'Listas', TAB_ICONS.playlists], ['content', 'Contenido', TAB_ICONS.content], ['schedule', 'Horarios', TAB_ICONS.schedule]];
+  const tabs = [['home', 'TVs', TAB_ICONS.home], ['playlists', 'Listas', TAB_ICONS.playlists], ['content', 'Contenido', TAB_ICONS.content], ['schedule', 'Horarios', TAB_ICONS.schedule]];
   return `<div class="tabbar">${tabs.map(([r, label, icon]) => `
     <button class="tab ${ui.route === r ? 'active' : ''}" ${A('goTab', r)}><div class="ico">${icon}</div><span>${label}</span></button>`).join('')}</div>`;
 }
@@ -662,12 +727,14 @@ function toastHtml() {
   return `<div style="position:fixed;left:50%;bottom:96px;transform:translateX(-50%);background:${ui.toast.isError ? '#3a1f1d' : '#1b1d22'};border:1px solid ${ui.toast.isError ? 'rgba(242,99,90,.4)' : 'var(--line)'};color:#fff;padding:10px 16px;border-radius:12px;font:600 12.5px var(--sans);z-index:30;max-width:88%;box-shadow:0 6px 20px rgba(0,0,0,.35)">${esc(ui.toast.msg)}</div>`;
 }
 function topbar(title) {
-  // El 🚨 solo va en Pantallas — es un disparador de emergencia para TODAS
-  // las pantallas de una, no pinta tenerlo repetido en cada pestaña.
+  // El 🚨 solo va en la pestaña Home (hoy: Ubicaciones) — es un disparador
+  // de emergencia para TODAS las TVs de una, no pinta tenerlo repetido en
+  // cada pestaña. Se fija por ruta, no por el texto del título, para que
+  // no dependa de cómo se llame esa pantalla.
   return `<div class="topbar" style="justify-content:space-between">
     <div class="title">${esc(title)}</div>
     <div style="display:flex;align-items:center;gap:14px">
-      ${title === 'Pantallas' ? `<div class="row-tap" title="Alerta de emergencia a todas las pantallas" style="font-size:18px;line-height:1" ${A('broadcastAlertNow')}>🚨</div>` : ''}
+      ${ui.route === 'home' ? `<div class="row-tap" title="Alerta de emergencia a todas las TVs" style="font-size:18px;line-height:1" ${A('broadcastAlertNow')}>🚨</div>` : ''}
       <div class="row-tap" title="Ajustes" style="font-size:18px;line-height:1" ${A('goTab', 'settings')}>⚙️</div>
     </div>
   </div>`;
@@ -695,53 +762,42 @@ function viewLogin() {
 
 // ---- Home (Pantallas) --------------------------------------------------------
 
+// Home pasa a ser Ubicaciones directo (antes era una lista de TVs con una
+// fila "📍 N ubicaciones ›" que llevaba a una pantalla aparte — ahora esa
+// pantalla aparte ES el home, un nivel menos de navegación). Elegir una
+// fuente y decidir en qué TVs se ve vive en viewLocationDetail(), un nivel
+// más adentro.
 function viewHome() {
-  const devices = remote.devices;
-  const byLoc = new Map(remote.locations.map(l => [l.id, []]));
-  byLoc.set(null, []);
-  for (const d of devices) { if (!byLoc.has(d.location)) byLoc.set(d.location, []); byLoc.get(d.location).push(d); }
-  const groups = [...remote.locations.map(l => [l, byLoc.get(l.id) || []]), [{ id: null, name: 'Sin ubicación' }, byLoc.get(null) || []]].filter(([, ds]) => ds.length);
-
-  return `<div class="screen">
-    ${topbar('Pantallas')}
-    <div class="content">
-      <div class="row" style="gap:8px;margin-bottom:10px">
-        <div class="row-tap" style="flex:1;text-align:center;padding:11px 0;border-radius:12px;background:var(--card-2);border:1px solid var(--line);font:600 12.5px var(--sans);color:var(--ink-dim)" ${A('startPairing')}>+ Emparejar pantalla</div>
-      </div>
-      <div class="row row-tap card-flat" style="padding:11px 13px;margin-bottom:16px" ${A('goLocations')}>
-        <div style="flex:1;min-width:0;font:500 12.5px var(--sans);color:var(--ink-dim)">📍 ${remote.locations.length} ubicacion${remote.locations.length === 1 ? '' : 'es'}</div>
-        <div style="color:var(--ink-faint);font:400 13px var(--sans)">›</div>
-      </div>
-      ${devices.length === 0 ? emptyState('Sin pantallas todavía', 'Empareja tu primera pantalla para empezar.') : groups.map(([loc, ds]) => `
-        <div class="eyebrow">${esc(loc.name)} · ${ds.length}</div>
-        <div class="grid-2" style="margin-bottom:18px">${ds.map(deviceRow).join('')}</div>
-      `).join('')}
-    </div>
-    ${tabbar()}
-    ${ui.detailDeviceId ? deviceSheet() : ''}
-    ${toastHtml()}
-  </div>`;
-}
-
-function viewLocations() {
   const counts = new Map(remote.locations.map(l => [l.id, 0]));
-  for (const d of remote.devices) if (counts.has(d.location)) counts.set(d.location, counts.get(d.location) + 1);
+  let unassigned = 0;
+  for (const d of remote.devices) { if (counts.has(d.location)) counts.set(d.location, counts.get(d.location) + 1); else unassigned++; }
   return `<div class="screen">
-    <div class="topbar"><div class="back" ${A('goTab', 'home')}>‹</div><div class="title">Ubicaciones</div></div>
+    ${topbar('Ubicaciones')}
     <div class="content">
-      ${remote.locations.length === 0 ? emptyState('Sin ubicaciones todavía', 'Agrega la primera para empezar a organizar tus pantallas.') : `<div class="stack" style="margin-bottom:16px">
+      <div class="row" style="gap:8px;margin-bottom:16px">
+        <div class="row-tap" style="flex:1;text-align:center;padding:11px 0;border-radius:12px;background:var(--card-2);border:1px solid var(--line);font:600 12.5px var(--sans);color:var(--ink-dim)" ${A('startPairing')}>+ Emparejar TV</div>
+      </div>
+      ${remote.locations.length === 0 && unassigned === 0 ? emptyState('Sin ubicaciones todavía', 'Agrega la primera para empezar a organizar tus TVs.') : `<div class="stack" style="margin-bottom:16px">
         ${remote.locations.map(l => `<div class="card row row-tap" style="padding:13px 14px" ${A('openLocation', l.id)}>
           <div style="flex:1;min-width:0">
             <div style="font:600 13px var(--sans)">${esc(l.name)}</div>
-            <div style="font:400 10.5px var(--mono);color:var(--ink-dimmer)">${counts.get(l.id) || 0} pantalla${counts.get(l.id) === 1 ? '' : 's'}</div>
+            <div style="font:400 10.5px var(--mono);color:var(--ink-dimmer)">${counts.get(l.id) || 0} TV${counts.get(l.id) === 1 ? '' : 's'}</div>
           </div>
           <div class="row-tap" title="Editar ubicación" style="width:28px;height:28px;border-radius:8px;flex:none;display:flex;align-items:center;justify-content:center;background:var(--card-2);margin-right:6px" ${A('editLocationNow', l.id)}>✏️</div>
           <div style="color:var(--ink-faint);font:400 13px var(--sans)">›</div>
         </div>`).join('')}
+        ${unassigned ? `<div class="card row row-tap" style="padding:13px 14px;opacity:.75" ${A('openUnassignedLocation')}>
+          <div style="flex:1;min-width:0">
+            <div style="font:600 13px var(--sans)">Sin ubicación</div>
+            <div style="font:400 10.5px var(--mono);color:var(--ink-dimmer)">${unassigned} TV${unassigned === 1 ? '' : 's'}</div>
+          </div>
+          <div style="color:var(--ink-faint);font:400 13px var(--sans)">›</div>
+        </div>` : ''}
       </div>`}
       <div class="btn btn-ghost row-tap" ${A('addLocation')}>+ Añadir ubicación</div>
-      <div style="font:400 11px/1.5 var(--sans);color:var(--ink-faint);margin-top:14px">Solo se puede eliminar una ubicación vacía (sin pantallas).</div>
+      <div style="font:400 11px/1.5 var(--sans);color:var(--ink-faint);margin-top:14px">Solo se puede eliminar una ubicación vacía (sin TVs).</div>
     </div>
+    ${tabbar()}
     ${ui.locationDraft ? locationEditor(ui.locationDraft) : ''}
     ${toastHtml()}
   </div>`;
@@ -765,18 +821,26 @@ function locationEditor(d) {
   </div>`;
 }
 
+// "Sin ubicación" (loc.id null) es un grupo de verdad pero no una fila de
+// la tabla locations — sin canales propios (los canales siempre son de
+// una ubicación real) ni cámaras PTZ, así que ahí solo se ve la grilla de
+// TVs (para moverlas a una ubicación real desde su ficha).
 function viewLocationDetail() {
-  const loc = remote.locations.find(l => l.id === ui.currentLocationId);
-  if (!loc) { ui.route = 'locations'; return viewLocations(); }
+  const loc = ui.currentLocationId === null ? { id: null, name: 'Sin ubicación' } : remote.locations.find(l => l.id === ui.currentLocationId);
+  if (loc === undefined) { ui.route = 'home'; return viewHome(); }
   const devices = remote.devices.filter(d => d.location === loc.id);
   const cams = (remote.ptzCameras || []).filter(c => c.location === loc.id);
+  const chans = (remote.channels || []).filter(c => c.location === loc.id);
+  const selChan = ui.locationSourceChannel ? chans.find(c => c.id === ui.locationSourceChannel) : null;
+  const activeCount = selChan ? devices.filter(d => d.liveChannel === selChan.id).length : 0;
   return `<div class="screen">
-    <div class="topbar"><div class="back" ${A('goLocations')}>‹</div><div class="title">${esc(loc.name)}</div></div>
+    <div class="topbar"><div class="back" ${A('goTab', 'home')}>‹</div><div class="title">${esc(loc.name)}</div></div>
     <div class="content">
-      <div class="eyebrow">Pantallas</div>
-      ${devices.length === 0 ? emptyState('Sin pantallas aquí todavía', 'Empareja una pantalla y elige esta ubicación, o mueve una existente desde su detalle.') : `<div class="grid-2" style="margin-bottom:20px">${devices.map(deviceRow).join('')}</div>`}
+      ${loc.id !== null ? locationSourceBlock(chans, selChan, activeCount) : ''}
+      <div class="eyebrow">TVs${devices.length ? ' · ' + devices.length : ''}</div>
+      ${devices.length === 0 ? emptyState('Sin TVs aquí todavía', 'Empareja una TV y elige esta ubicación, o mueve una existente desde su detalle.') : `<div class="grid-4" style="margin-bottom:20px">${devices.map(d => deviceTile(d, selChan ? selChan.id : null)).join('')}</div>`}
 
-      <div class="row" style="justify-content:space-between;align-items:baseline;margin-bottom:11px">
+      ${loc.id !== null ? `<div class="row" style="justify-content:space-between;align-items:baseline;margin-bottom:11px">
         <div class="eyebrow" style="margin:0">Cámaras PTZ</div>
         <div class="row-tap" style="font:600 11px var(--sans);color:var(--accent)" ${A('addPtzCamera', loc.id)}>+ Agregar</div>
       </div>
@@ -788,12 +852,38 @@ function viewLocationDetail() {
           </div>
           <div class="row-tap" title="Editar cámara" style="margin-left:8px" ${A('editPtzCameraNow', c.id)}>✏️</div>
         </div>`).join('')}
-      </div>
+      </div>` : ''}
     </div>
     ${ui.detailDeviceId ? deviceSheet() : ''}
     ${ui.ptzCameraDraft ? ptzCameraEditor(ui.ptzCameraDraft) : ''}
     ${toastHtml()}
   </div>`;
+}
+
+// Selector de fuente de la ubicación (arriba de la grilla de TVs): elegir
+// un canal solo cambia el preview grande y qué TVs se resaltan abajo —
+// para de verdad prenderlo hay que tocar la TV en la grilla. "Mezclar"
+// actúa sobre la mezcla de la(s) TV(s) que ya tienen esta fuente activa
+// (ver openMixForChannel) — deshabilitado visualmente si ninguna la tiene.
+function locationSourceBlock(chans, selChan, activeCount) {
+  const box = 'width:100%;aspect-ratio:16/9;border-radius:14px;overflow:hidden;background:repeating-linear-gradient(135deg,#242830 0 7px,#1c1f25 7px 14px);display:flex;align-items:center;justify-content:center;margin-bottom:14px;position:relative';
+  return `<div class="eyebrow">Fuente</div>
+  <div style="${box}">
+    ${selChan
+      ? `<video autoplay muted playsinline data-webrtc-offer="/api/channels/${esc(selChan.id)}/webrtc-offer" data-mp4-src="${channelLiveFeedUrl(selChan.id)}" data-snapshot-src="${channelLiveFeedUrl(selChan.id, 'snapshot')}" style="position:absolute;inset:0;width:100%;height:100%;object-fit:cover"></video>
+         <div class="badge-live" style="position:absolute;top:10px;left:10px"><div class="dot dot-sm" style="background:var(--red)"></div><span>EN DIRECTO</span></div>`
+      : `<span style="font:500 10px var(--mono);color:var(--ink-faint)">elige una fuente</span>`}
+  </div>
+  <div class="row" style="gap:8px;margin-bottom:${selChan ? '6px' : '16px'}">
+    <select data-change="setLocationSourcePreview" style="flex:1;min-width:0;padding:11px;border-radius:10px;background:var(--card-2);border:1.5px solid ${selChan ? 'var(--accent)' : 'var(--line)'};color:var(--ink)">
+      <option value="" ${!selChan ? 'selected' : ''}>Elegir fuente…</option>
+      ${chans.map(c => `<option value="${esc(c.id)}" ${selChan && selChan.id === c.id ? 'selected' : ''}>🔴 ${esc(c.name)}</option>`).join('')}
+    </select>
+    <div class="row-tap" style="flex:none;padding:11px 16px;border-radius:10px;background:${activeCount ? 'rgba(47,123,246,.12)' : 'var(--card-2)'};border:1px solid ${activeCount ? 'var(--accent)' : 'var(--line)'};font:600 12px var(--sans)" ${selChan ? A('openMixForChannel', selChan.id) : ''}>🎛️ Mezclar</div>
+  </div>
+  ${chans.length === 0 ? `<div class="row card-flat row-tap" style="padding:11px 14px;opacity:.6;margin-bottom:16px" ${A('goTab', 'content')}>
+    <div style="flex:1;min-width:0"><div style="font:600 12.5px var(--sans);margin-bottom:2px">Sin canales todavía</div><div style="font:400 10.5px var(--mono);color:var(--ink-dimmer)">configúralos en Contenido → Canales</div></div>
+  </div>` : selChan ? `<div style="font:400 10.5px var(--mono);color:var(--ink-dimmer);margin:0 0 16px">Toca una TV abajo para prenderla o apagarla ahí · ${activeCount} activa${activeCount === 1 ? '' : 's'}</div>` : `<div style="margin-bottom:16px"></div>`}`;
 }
 
 function ptzCameraEditor(d) {
@@ -887,30 +977,37 @@ function viewPtz() {
         </div>`;
       })()}
 
-      <div class="btn btn-primary row-tap" style="margin-top:14px" ${A('sendPtzToScreensNow')}>Enviar a las pantallas</div>
+      <div class="btn btn-primary row-tap" style="margin-top:14px" ${A('sendPtzToScreensNow')}>Enviar a las TVs</div>
       ${!cam.view_url ? `<div style="font:400 10px var(--mono);color:var(--ink-faint);text-align:center;margin-top:6px">Falta configurar la URL de video de esta cámara</div>` : ''}
     </div>
     ${toastHtml()}
   </div>`;
 }
 
-// Tarjeta de pantalla — mismo patrón visual que las tarjetas de Contenido
-// (miniatura 16:9 arriba, texto abajo), en vez de una fila.
-function deviceRow(d) {
+// Tarjeta compacta de TV para la grilla de 4 — mismo previewThumb() de
+// siempre, solo que más chica y con dos gestos en vez de uno:
+//   · toque corto: prende/apaga la fuente seleccionada arriba en ESTA TV
+//     (data-action → toggleDeviceChannel). Sin fuente elegida, no hace nada.
+//   · mantener presionado: abre la ficha completa de la TV (nombre,
+//     ubicación, orientación, etc. — lo que antes abría el toque normal).
+// selectedChannelId null = no hay fuente elegida arriba: se ve igual que
+// antes, solo más chica, sin resaltado ni toque activo.
+function deviceTile(d, selectedChannelId) {
   const status = deviceStatus(d);
   const playlist = remote.playlists.find(p => p.id === d.playlist);
   const firstItem = playlist && playlist.items[0];
   const firstChannel = firstItem && firstItem.channel ? remote.channels.find(c => c.id === firstItem.channel) : null;
   const firstAsset = firstItem && !firstItem.channel ? remote.assets.find(a => a.id === firstItem.asset) : null;
-  return `<div class="card row-tap" style="overflow:hidden;position:relative" ${A('openDevice', d.id)}>
-    ${d.alert ? `<div title="${esc(d.alert.text)}" style="position:absolute;top:6px;right:6px;z-index:1;font-size:14px;line-height:1;filter:drop-shadow(0 1px 2px rgba(0,0,0,.5))">🚨</div>` : ''}
+  const active = selectedChannelId && d.liveChannel === selectedChannelId;
+  const tapAttrs = selectedChannelId ? A('toggleDeviceChannel', `${d.id}:${selectedChannelId}`) : '';
+  return `<div class="card row-tap" style="overflow:hidden;position:relative;${active ? 'box-shadow:0 0 0 2px var(--accent)' : ''}" ${tapAttrs} data-longpress="openDevice" data-longpress-arg="${esc(d.id)}">
+    ${d.alert ? `<div title="${esc(d.alert.text)}" style="position:absolute;top:4px;right:4px;z-index:1;font-size:11px;line-height:1;filter:drop-shadow(0 1px 2px rgba(0,0,0,.5))">🚨</div>` : ''}
     ${previewThumb(d, firstAsset, firstChannel)}
-    <div style="padding:9px 10px 11px">
-      <div class="row" style="gap:6px;margin-bottom:3px">
+    <div style="padding:5px 6px 6px">
+      <div class="row" style="gap:4px">
         <div class="dot dot-sm" style="background:${STATUS_COLOR[status]}"></div>
-        <div style="font:600 12.5px var(--sans);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(d.name)}${d.paused ? ' ⏸' : ''}</div>
+        <div style="font:600 10.5px var(--sans);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(d.name)}${d.paused ? ' ⏸' : ''}</div>
       </div>
-      <div style="font:400 10px var(--mono);color:var(--ink-dimmer);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${d.liveSource ? 'señal en vivo' : playlist ? esc(playlist.name) : 'sin lista'} · ${fmtTime(d.seen)}</div>
     </div>
   </div>`;
 }
@@ -1054,7 +1151,7 @@ function mixOverlayHtml(m) {
 
 function viewMix() {
   const d = remote.devices.find(d => d.id === ui.mixDeviceId);
-  if (!d || !ui.mixDraft) return `<div class="screen"><div class="topbar"><div class="back" ${A('backFromMix')}>‹</div></div><div class="content" style="padding-top:30px;text-align:center;color:var(--ink-faint)">Pantalla no encontrada.</div></div>`;
+  if (!d || !ui.mixDraft) return `<div class="screen"><div class="topbar"><div class="back" ${A('backFromMix')}>‹</div></div><div class="content" style="padding-top:30px;text-align:center;color:var(--ink-faint)">TV no encontrada.</div></div>`;
   const m = ui.mixDraft;
   // "Composición" — los 4 formatos del mockup (Franja/Esquina/Lateral/Corte),
   // cada uno con una guía corta de cuándo tiene sentido usarlo.
@@ -1158,7 +1255,7 @@ function viewMix() {
         <div class="row card-flat row-tap" style="padding:11px 13px;gap:6px" ${A('applyMixTemplate', t.id)}>
           <div style="flex:1;min-width:0"><div style="font:600 12.5px var(--sans);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(t.name)}</div><div style="font:400 10px var(--mono);color:var(--ink-dimmer)">${layoutLabel[t.layout] || t.layout}${t.text ? ' · ' + esc(t.text) : ''}</div></div>
           ${d.location ? `<div class="row-tap" title="Aplicar a toda la ubicación" style="width:28px;height:28px;border-radius:8px;flex:none;display:flex;align-items:center;justify-content:center;background:var(--card)" ${A('applyMixTemplateToLocation', t.id)}>📍</div>` : ''}
-          <div class="row-tap" title="Aplicar a todas mis pantallas" style="width:28px;height:28px;border-radius:8px;flex:none;display:flex;align-items:center;justify-content:center;background:var(--card)" ${A('applyMixTemplateToAllNow', t.id)}>📡</div>
+          <div class="row-tap" title="Aplicar a todas mis TVs" style="width:28px;height:28px;border-radius:8px;flex:none;display:flex;align-items:center;justify-content:center;background:var(--card)" ${A('applyMixTemplateToAllNow', t.id)}>📡</div>
           <div class="row-tap" title="Editar" style="width:28px;height:28px;border-radius:8px;flex:none;display:flex;align-items:center;justify-content:center;background:var(--card)" ${A('editMixTemplateNow', t.id)}>✏️</div>
         </div>`).join('')}
       </div>
@@ -1250,7 +1347,7 @@ function deviceSheet() {
         ${remote.locations.map(l => `<option value="${esc(l.id)}" ${l.id === d.location ? 'selected' : ''}>${esc(l.name)}</option>`).join('')}
       </select>
 
-      <div class="eyebrow">Pantalla</div>
+      <div class="eyebrow">TV</div>
       <div data-display-form style="margin-bottom:16px" class="stack">
         <select name="orientation" data-change="setDisplayOpt" data-arg="${esc(d.id)}" style="padding:11px;border-radius:10px;background:var(--card-2);border:1px solid var(--line);color:var(--ink)">
           <option value="auto" ${d.orientation === 'auto' ? 'selected' : ''}>Automática</option>
@@ -1267,7 +1364,7 @@ function deviceSheet() {
       </div>` : ''}`;
     })()}
 
-    <div class="row-tap" style="text-align:center;padding:12px 0;margin-top:4px;font:600 12px var(--sans);color:var(--red)" ${A('revoke', d.id)}>Quitar esta pantalla</div>
+    <div class="row-tap" style="text-align:center;padding:12px 0;margin-top:4px;font:600 12px var(--sans);color:var(--red)" ${A('revoke', d.id)}>Quitar esta TV</div>
   </div>`;
 }
 
@@ -1278,9 +1375,9 @@ function viewPair() {
   // emparejar — la muestra en su QR. Aquí solo la escaneamos o tecleamos
   // el código, y se reclama con nombre + ubicación.
   return `<div class="screen">
-    <div class="topbar"><div class="back" ${A('cancelPair')}>‹</div><div class="title">Emparejar pantalla</div></div>
+    <div class="topbar"><div class="back" ${A('cancelPair')}>‹</div><div class="title">Emparejar TV</div></div>
     <div class="content">
-      <div style="font:400 12px/1.5 var(--sans);color:var(--ink-dim);margin-bottom:14px">La pantalla física muestra su propio QR y código al encenderse sin emparejar. Escanéalo con la cámara o escríbelo abajo.</div>
+      <div style="font:400 12px/1.5 var(--sans);color:var(--ink-dim);margin-bottom:14px">La TV física muestra su propio QR y código al encenderse sin emparejar. Escanéalo con la cámara o escríbelo abajo.</div>
       <div id="qr-reader" style="border-radius:14px;overflow:hidden;margin-bottom:12px;min-height:0"></div>
       <div class="btn btn-ghost row-tap" id="qr-toggle" style="margin-bottom:16px" ${A('toggleScanner')}>Abrir cámara</div>
       <form data-submit="confirmPair">
@@ -1405,7 +1502,7 @@ function viewContent() {
         <div class="row-tap" style="font:600 11.5px var(--sans);color:var(--accent)" ${A('newChannel')}>+ Nuevo</div>
       </div>
       <div class="stack" style="margin-bottom:22px">
-        ${(remote.channels || []).length === 0 ? `<div style="padding:16px 0;text-align:center;color:var(--ink-faint);font:400 12px var(--sans)">Sin canales todavía — crea uno para usarlo como fuente en cualquier pantalla o dentro de una lista.</div>` : remote.channels.map(c => {
+        ${(remote.channels || []).length === 0 ? `<div style="padding:16px 0;text-align:center;color:var(--ink-faint);font:400 12px var(--sans)">Sin canales todavía — crea uno para usarlo como fuente en cualquier TV o dentro de una lista.</div>` : remote.channels.map(c => {
           const loc = remote.locations.find(l => l.id === c.location);
           return `<div class="card row" style="padding:12px 14px">
             <div style="flex:1;min-width:0">
@@ -1555,7 +1652,7 @@ function viewSchedule() {
         <div class="btn btn-primary row-tap" style="padding:10px 16px;font-size:12.5px" ${A('newSchedule')}>+ Nuevo programa</div>
       </div>
       <div class="stack">
-        ${remote.schedules.length === 0 ? emptyState('Sin programas todavía', 'Crea uno para que una pantalla cambie sola de contenido según la hora.') : remote.schedules.map(s => {
+        ${remote.schedules.length === 0 ? emptyState('Sin programas todavía', 'Crea uno para que una TV cambie sola de contenido según la hora.') : remote.schedules.map(s => {
           const dev = remote.devices.find(x => x.id === s.device); const pl = remote.playlists.find(x => x.id === s.playlist);
           return `<div class="card" style="padding:13px 14px">
             <div class="row" style="justify-content:space-between;margin-bottom:5px">
@@ -1792,7 +1889,7 @@ function viewSettings() {
         </div>
       </div>
       <a class="row card-flat row-tap" href="/downloads/venuepro-signage-test.apk" download style="padding:13px 14px;margin-top:10px;text-decoration:none;color:inherit">
-        <div style="flex:1;min-width:0"><div style="font:600 13px var(--sans)">📱 Descargar APK</div><div style="font:400 10.5px var(--mono);color:var(--ink-dimmer)">Reproductor Android para pantallas nuevas</div></div>
+        <div style="flex:1;min-width:0"><div style="font:600 13px var(--sans)">📱 Descargar APK</div><div style="font:400 10.5px var(--mono);color:var(--ink-dimmer)">Reproductor Android para TVs nuevas</div></div>
         <div style="color:var(--ink-faint);font:400 13px var(--sans)">⬇</div>
       </a>
       <div style="font:400 10px var(--mono);color:var(--ink-dimmer);margin-top:20px;text-align:center">${esc(remote.tenant)} · ${esc(remote.role)}</div>
@@ -1824,7 +1921,6 @@ function render() {
     case 'team': app.innerHTML = viewTeam(); break;
     case 'settings': app.innerHTML = viewSettings(); break;
     case 'pair': app.innerHTML = viewPair(); break;
-    case 'locations': app.innerHTML = viewLocations(); break;
     case 'locationDetail': app.innerHTML = viewLocationDetail(); break;
     case 'studio': app.innerHTML = viewStudio(); break;
     case 'studioDraft': app.innerHTML = viewStudioDraft(); break;

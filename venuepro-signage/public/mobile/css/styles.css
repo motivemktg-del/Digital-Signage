@@ -138,6 +138,10 @@ body{
 
 /* Misc --------------------------------------------------------------------- */
 .grid-2{display:grid; grid-template-columns:1fr 1fr; gap:12px}
+/* Grilla compacta de TVs (asignar fuente): 4 por fila en vez de 2, mismas
+   miniaturas de previewThumb() pero más chicas — para ver de un vistazo
+   dónde está activa cada fuente sin scrollear tanto. */
+.grid-4{display:grid; grid-template-columns:repeat(4,1fr); gap:8px}
 .stack{display:flex; flex-direction:column; gap:9px}
 .progress-track{height:5px; border-radius:3px; background:rgba(255,255,255,.09); overflow:hidden}
 .progress-fill{height:100%; border-radius:3px}
