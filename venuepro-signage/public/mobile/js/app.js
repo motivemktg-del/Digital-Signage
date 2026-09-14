@@ -132,6 +132,11 @@ const actions = {
       actions.openStudioDraft(created.id);
     } catch (e) { showToast(e.message, true); }
   },
+  async deleteStudioDraftNow(id) {
+    if (!confirm('¿Eliminar este borrador de poster? No se puede deshacer.')) return;
+    try { await deleteStudioDraft(id); ui.studioDrafts = await listStudioDrafts(); showToast('Borrador eliminado'); render(); }
+    catch (e) { showToast(e.message, true); }
+  },
   async openStudioDraft(id) {
     ui.studioDraftId = id; ui.route = 'studioDraft'; ui.studioJob = null; render();
     try { ui.studioDraft = await getStudioDraft(id); } catch (e) { showToast(e.message, true); }
@@ -748,6 +753,159 @@ function scheduleEditor(d) {
   </div>`;
 }
 
+// ---- Estudio IA (real — ver studio.js/STUDIO-IA.md) ----------------------------
+
+function viewStudio() {
+  const c = ui.studioConfig;
+  return `<div class="screen">
+    <div class="topbar"><div class="back" ${A('goTab', 'content')}>‹</div><div class="title">Estudio IA</div></div>
+    <div class="content">
+      ${!c ? `<div style="padding:30px 0;text-align:center;color:var(--ink-faint)">Cargando…</div>`
+        : !c.eligible ? `<div style="padding:24px 0;text-align:center;color:var(--ink-dim);font:400 12.5px/1.6 var(--sans)">Estudio IA es exclusivo de empresas vinculadas a tu CRM. Esta cuenta no lo está.</div>`
+        : ui.studioConfigForm ? studioConfigForm(ui.studioConfigForm)
+        : !c.enabled || !c.verified ? studioConfigPrompt(c)
+        : studioDraftsList(c)}
+    </div>
+    ${toastHtml()}
+  </div>`;
+}
+
+function studioConfigPrompt(c) {
+  return `<div style="padding:16px;border-radius:14px;background:var(--card-2);border:1px solid var(--line)">
+    <div style="font:600 13px var(--sans);margin-bottom:6px">${remote.role === 'admin' ? 'Falta configurar Estudio IA' : 'Estudio IA no está configurado todavía'}</div>
+    <div style="font:400 11.5px/1.5 var(--sans);color:var(--ink-dim);margin-bottom:${remote.role === 'admin' ? '12px' : '0'}">${c.hasKey ? 'Hay una clave cargada pero falta habilitarla o verificarla.' : 'Necesitas una clave API de OpenAI propia de esta empresa.'}</div>
+    ${remote.role === 'admin' ? `<div class="btn btn-primary row-tap" style="font-size:12.5px" ${A('editStudioConfig')}>Configurar ahora</div>` : `<div style="font:400 11px var(--sans);color:var(--ink-faint)">Pide a un administrador que la configure.</div>`}
+  </div>`;
+}
+
+function studioConfigForm(f) {
+  return `<form data-submit="saveStudioConfigNow">
+    <div class="stack">
+      <input name="apiKey" type="password" placeholder="Clave API de OpenAI (sk-...)" autocomplete="off" style="padding:12px 14px;border-radius:12px;background:var(--card-2);border:1px solid var(--line);color:var(--ink)">
+      <div style="font:400 10.5px var(--mono);color:var(--ink-faint)">Déjala vacía si ya hay una guardada y solo quieres cambiar el cupo.</div>
+      <input name="monthlyLimit" type="number" min="0" max="1000" value="${f.monthlyLimit}" placeholder="Cupo mensual de solicitudes" style="padding:12px 14px;border-radius:12px;background:var(--card-2);border:1px solid var(--line);color:var(--ink)">
+      <label class="row" style="gap:10px"><input type="checkbox" name="enabled" ${f.enabled ? 'checked' : ''}><span style="font:500 12.5px var(--sans)">Habilitar Estudio IA</span></label>
+      <button type="submit" class="btn btn-primary" style="border:none">Guardar</button>
+      <div class="btn btn-ghost row-tap" ${A('cancelStudioConfig')}>Cancelar</div>
+    </div>
+  </form>`;
+}
+
+function studioDraftsList(c) {
+  return `<div class="card" style="padding:13px 14px;margin-bottom:16px">
+    <div class="row" style="justify-content:space-between;margin-bottom:4px"><span style="font:600 12.5px var(--sans)">Cupo mensual</span><span style="font:400 11px var(--mono);color:var(--ink-dimmer)">${c.requestsThisMonth} / ${c.monthlyLimit}</span></div>
+    <div class="progress-track"><div class="progress-fill" style="width:${Math.min(100, c.monthlyLimit ? c.requestsThisMonth / c.monthlyLimit * 100 : 0)}%;background:var(--accent)"></div></div>
+    ${remote.role === 'admin' ? `<div class="row-tap" style="margin-top:10px;font:500 11px var(--sans);color:var(--ink-dim)" ${A('editStudioConfig')}>Ajustar configuración</div>` : ''}
+    ${!c.verified ? `<div class="row-tap" style="margin-top:8px;font:500 11px var(--sans);color:var(--accent)" ${A('verifyStudioNow')}>Verificar acceso al modelo</div>` : ''}
+  </div>
+  <div class="row" style="justify-content:flex-end;margin-bottom:12px"><div class="btn btn-primary row-tap" style="padding:10px 16px;font-size:12.5px" ${A('newStudioDraft')}>+ Nuevo poster</div></div>
+  <div class="stack">
+    ${(ui.studioDrafts || []).map(d => `<div class="card row" style="padding:12px 14px">
+      <div class="row-tap" style="flex:1;min-width:0" ${A('openStudioDraft', d.id)}><div style="font:600 12.5px var(--sans)">${esc(d.name)}</div><div style="font:400 10px var(--mono);color:var(--ink-dimmer)">${fmtTime(d.created)}</div></div>
+      <div class="row-tap" title="Eliminar" style="margin-left:8px" ${A('deleteStudioDraftNow', d.id)}>🗑️</div>
+    </div>`).join('') || `<div style="padding:16px 0;text-align:center;color:var(--ink-faint);font:400 12px var(--sans)">Sin posters todavía.</div>`}
+  </div>`;
+}
+
+function viewStudioDraft() {
+  const d = ui.studioDraft;
+  if (!d) return `<div class="screen"><div class="topbar"><div class="back" ${A('backToStudio')}>‹</div></div><div class="content" style="padding-top:30px;text-align:center;color:var(--ink-faint)">Cargando…</div></div>`;
+  const job = ui.studioJob;
+  const c = ui.studioConfig;
+  const canGenerate = c && c.enabled && c.verified && c.requestsThisMonth < c.monthlyLimit;
+  return `<div class="screen">
+    <div class="topbar"><div class="back" ${A('backToStudio')}>‹</div><div class="title">${esc(d.name)}</div></div>
+    <div class="content">
+      ${job && job.status === 'ready' ? `<canvas id="studio-canvas" style="width:100%;border-radius:14px;margin-bottom:8px;background:#000"></canvas>
+          <div class="btn btn-primary row-tap" style="margin-bottom:16px" ${A('exportStudioNow')}>Guardar en biblioteca</div>`
+        : job && (job.status === 'processing' || job.status === 'saving') ? `<div class="thumb" style="aspect-ratio:16/9;margin-bottom:16px"><span>generando…</span></div>`
+        : job && job.status === 'storage_failed' ? `<div style="padding:14px;border-radius:12px;background:rgba(240,180,41,.09);border:1px solid rgba(240,180,41,.25);margin-bottom:16px">
+            <div style="font:400 11.5px/1.5 var(--sans);color:#d3b271;margin-bottom:10px">${esc(job.error || 'No se pudo guardar.')}</div>
+            <div class="btn btn-ghost row-tap" style="font-size:12px" ${A('retryStudioSaveNow')}>Reintentar guardado</div>
+          </div>`
+        : job && (job.status === 'failed' || job.status === 'uncertain') ? `<div style="padding:14px;border-radius:12px;background:rgba(242,99,90,.09);border:1px solid rgba(242,99,90,.25);margin-bottom:16px;font:400 11.5px/1.5 var(--sans);color:#e2a29c">${esc(job.error || 'No se pudo generar.')}</div>`
+        : `<div class="thumb" style="aspect-ratio:16/9;margin-bottom:16px"><span>sin generar todavía</span></div>`}
+
+      <div class="eyebrow">Datos del poster</div>
+      <div class="stack" style="margin-bottom:14px">
+        <select data-change="setDraftKind" style="padding:11px;border-radius:10px;background:var(--card-2);border:1px solid var(--line);color:var(--ink)">
+          ${Object.entries(STUDIO_KIND_LABEL).map(([k, label]) => `<option value="${k}" ${d.data.kind === k ? 'selected' : ''}>${label}</option>`).join('')}
+        </select>
+        <select data-change="setDraftOrientation" style="padding:11px;border-radius:10px;background:var(--card-2);border:1px solid var(--line);color:var(--ink)">
+          <option value="landscape" ${d.data.orientation === 'landscape' ? 'selected' : ''}>Horizontal (1920×1080)</option>
+          <option value="portrait" ${d.data.orientation === 'portrait' ? 'selected' : ''}>Vertical (1080×1920)</option>
+          <option value="square" ${d.data.orientation === 'square' ? 'selected' : ''}>Cuadrada (1080×1080)</option>
+        </select>
+        <input value="${esc(d.data.style)}" placeholder="Estilo (ej. cálido, fotográfico, minimal)" data-input="setDraftField" data-arg="style" style="padding:11px 13px;border-radius:10px;background:var(--card-2);border:1px solid var(--line);color:var(--ink)">
+        <textarea placeholder="Notas para la IA (qué se ve en el fondo)" data-input="setDraftField" data-arg="notes" rows="2" style="padding:11px 13px;border-radius:10px;background:var(--card-2);border:1px solid var(--line);color:var(--ink);font-family:var(--sans);resize:vertical">${esc(d.data.notes)}</textarea>
+      </div>
+
+      <div class="eyebrow">Capas de texto</div>
+      <div class="stack" style="margin-bottom:12px">
+        ${d.data.layers.map((l, idx) => `<div class="card-flat" style="padding:10px 12px">
+          <input value="${esc(l.text)}" data-input="setLayerField" data-arg="${idx}:text" style="width:100%;box-sizing:border-box;padding:8px 10px;border-radius:8px;background:var(--card);border:1px solid var(--line);color:var(--ink);margin-bottom:6px">
+          <div class="row" style="gap:6px">
+            <input type="number" value="${l.x}" min="0" max="95" data-change="setLayerField" data-arg="${idx}:x" title="X %" style="width:0;flex:1;padding:6px;border-radius:8px;background:var(--card);border:1px solid var(--line);color:var(--ink);text-align:center">
+            <input type="number" value="${l.y}" min="0" max="95" data-change="setLayerField" data-arg="${idx}:y" title="Y %" style="width:0;flex:1;padding:6px;border-radius:8px;background:var(--card);border:1px solid var(--line);color:var(--ink);text-align:center">
+            <input type="number" value="${l.size}" min="12" max="160" data-change="setLayerField" data-arg="${idx}:size" title="Tamaño" style="width:0;flex:1;padding:6px;border-radius:8px;background:var(--card);border:1px solid var(--line);color:var(--ink);text-align:center">
+            <input type="color" value="${l.color}" data-change="setLayerField" data-arg="${idx}:color" style="width:36px;padding:0;border-radius:8px;border:1px solid var(--line);background:none;flex:none">
+            <div class="row-tap" style="color:var(--red);font:600 14px var(--sans);flex:none;padding:0 4px" ${A('removeTextLayer', idx)}>×</div>
+          </div>
+        </div>`).join('') || `<div style="padding:10px 0;text-align:center;color:var(--ink-faint);font:400 11.5px var(--sans)">Sin capas de texto.</div>`}
+      </div>
+      <div class="btn btn-ghost row-tap" style="margin-bottom:16px" ${A('addTextLayer')}>+ Agregar texto</div>
+
+      <div class="btn btn-ghost row-tap" style="margin-bottom:10px" ${A('saveStudioDraftNow')}>Guardar borrador</div>
+      ${canGenerate ? `<div class="btn btn-primary row-tap" ${A('generateStudioNow')}>Generar fondo con IA</div>` : `<div style="font:400 11px var(--sans);color:var(--ink-faint);text-align:center">${!c || !c.enabled || !c.verified ? 'Configura y verifica Estudio IA primero.' : 'Cupo mensual agotado.'}</div>`}
+    </div>
+    ${toastHtml()}
+  </div>`;
+}
+
+// Repinta el canvas del borrador con el fondo generado + las capas de
+// texto encima — sin volver a pedir la imagen si ya está en caché.
+let studioBgImage = null;
+function drawStudioCanvas() {
+  const canvas = document.getElementById('studio-canvas');
+  if (!canvas || !ui.studioJob || ui.studioJob.status !== 'ready' || !ui.studioDraft) return;
+  const [w, h] = STUDIO_SIZE[ui.studioDraft.data.orientation];
+  canvas.width = w; canvas.height = h;
+  const paint = img => {
+    const ctx = canvas.getContext('2d');
+    ctx.clearRect(0, 0, w, h);
+    const scale = Math.max(w / img.width, h / img.height);
+    const dw = img.width * scale, dh = img.height * scale;
+    ctx.drawImage(img, (w - dw) / 2, (h - dh) / 2, dw, dh);
+    for (const layer of ui.studioDraft.data.layers) {
+      ctx.fillStyle = layer.color;
+      ctx.font = `700 ${layer.size}px sans-serif`;
+      ctx.textBaseline = 'top';
+      ctx.fillText(layer.text, w * layer.x / 100, h * layer.y / 100);
+    }
+  };
+  if (studioBgImage && studioBgImage._assetId === ui.studioJob.asset) { paint(studioBgImage); return; }
+  const img = new Image();
+  img.onload = () => { img._assetId = ui.studioJob.asset; studioBgImage = img; paint(img); };
+  img.src = assetMediaUrl(ui.studioJob.asset);
+}
+
+// Sondea /api/studio/jobs cada 3s hasta que el job deje de estar
+// 'processing'/'saving' — no hay websockets, así que es polling simple.
+function pollStudioJob(requestId) {
+  const check = async () => {
+    try {
+      const jobs = await listStudioJobs();
+      const job = jobs.find(j => j.id === requestId);
+      if (!job) return;
+      ui.studioJob = job;
+      if (job.status === 'processing' || job.status === 'saving') { setTimeout(check, 3000); return; }
+      render();
+      if (job.status === 'ready') drawStudioCanvas();
+    } catch { /* deja de sondear en error de red; el usuario puede reabrir el borrador */ }
+  };
+  check();
+}
+
 // ---- Equipo -------------------------------------------------------------------
 
 let usersCache = null;
@@ -793,6 +951,8 @@ function render() {
     case 'pair': app.innerHTML = viewPair(); break;
     case 'locations': app.innerHTML = viewLocations(); break;
     case 'locationDetail': app.innerHTML = viewLocationDetail(); break;
+    case 'studio': app.innerHTML = viewStudio(); break;
+    case 'studioDraft': app.innerHTML = viewStudioDraft(); break;
     default: app.innerHTML = viewHome();
   }
 }
