@@ -89,7 +89,21 @@ public class MainActivity extends Activity {
   secret=getPreferences(0).getString("secret","");
   try{current=new JSONObject(new String(new AtomicFile(new File(getFilesDir(),"manifest.json")).readFully(),StandardCharsets.UTF_8));version=current.getString("version");liveSource=current.optString("liveSource","");liveSourceRtsp=current.optString("liveSourceRtsp","");liveSourceWebrtc=current.optString("liveSourceWebrtc","");}catch(Exception ignored){}
   if(!liveSource.isEmpty())playLive(liveSource);else if(current!=null)playNext();else{String saved=getPreferences(0).getString("pairQr","");if(!saved.isEmpty()){try{byte[] bytes=Base64.decode(saved,Base64.DEFAULT);showPair(BitmapFactory.decodeByteArray(bytes,0,bytes.length),getPreferences(0).getString("pairCode",""));}catch(Exception ignored){message("VenuePro Signage\nConectando tu pantalla…");}}else message("VenuePro Signage\nConectando tu pantalla…");}
-  network.scheduleWithFixedDelay(this::sync,0,20,TimeUnit.SECONDS);
+  network.execute(this::syncLoop);
+ }
+ // En vez de un sondeo a intervalo FIJO (antes 20s siempre, cambie algo o
+ // no), esto encadena sync() de inmediato apenas termina el anterior — la
+ // pausa real ahora la pone el propio servidor (long-polling, ver
+ // MANIFEST_WAIT_MS en server.js): si nada cambió se demora ahí adentro
+ // unos ~18s antes de contestar iguales, y si SÍ cambió algo (cambiar de
+ // canal, apagar la señal en vivo, una mezcla nueva) contesta casi al
+ // instante. Solo se mete una pausa acá cuando hubo un error de verdad
+ // (red caída, servidor no responde), para no martillarlo en un loop
+ // cerrado mientras esté mal.
+ private void syncLoop(){
+  if(destroyed)return;
+  boolean ok=sync();
+  network.schedule(this::syncLoop,ok?0:5,TimeUnit.SECONDS);
  }
  private HttpURLConnection connection(String url,String method)throws Exception{
   URL parsed=new URL(url);if(!parsed.getProtocol().equals("https")||!parsed.getHost().equals(new URL(SERVER).getHost()))throw new IOException("Servidor no permitido");
@@ -105,8 +119,10 @@ public class MainActivity extends Activity {
  }
  private byte[] read(InputStream in,int limit)throws IOException{ByteArrayOutputStream out=new ByteArrayOutputStream();byte[] b=new byte[8192];int n;while((n=in.read(b))!=-1){if(out.size()+n>limit)throw new IOException("Respuesta demasiado grande");out.write(b,0,n);}return out.toByteArray();}
  private static class Unpaired extends IOException{}
- private void sync(){
-  if(destroyed)return;
+ // Devuelve true si el ciclo salió limpio (para que syncLoop() decida si
+ // encadena el siguiente ya mismo o espera un poco por haber fallado).
+ private boolean sync(){
+  if(destroyed)return true;
   try{
    if(secret.isEmpty()){
     JSONObject pair=request("/api/pair/start",new JSONObject());secret=pair.getString("secret");getPreferences(0).edit().putString("secret",secret).apply();
@@ -114,8 +130,11 @@ public class MainActivity extends Activity {
     getPreferences(0).edit().putString("pairQr",data).putString("pairCode",code).apply();
     ui.post(()->showPair(qr,code));
    }
-   JSONObject next=request("/api/player/manifest",null);
-   if(!next.optBoolean("paired"))return;
+   // since/wait activan el long-polling del lado del servidor — mientras
+   // la versión no cambie de verdad, la respuesta se demora ahí adentro
+   // en vez de contestar ya con lo mismo de siempre (ver server.js).
+   JSONObject next=request("/api/player/manifest?since="+URLEncoder.encode(version,"UTF-8")+"&wait=1",null);
+   if(!next.optBoolean("paired"))return true;
    getPreferences(0).edit().remove("pairQr").remove("pairCode").apply();
    if(!next.getString("version").equals(version)){
     LinkedHashMap<String,JSONObject> all=new LinkedHashMap<>();collect(next.getJSONArray("items"),all);
@@ -139,10 +158,12 @@ public class MainActivity extends Activity {
      else if(saliendoDeEnVivo||(!playing&&!paused))playNext();});
    }
    request("/api/player/heartbeat",new JSONObject().put("version",version).put("error",lastError));
+   return true;
   }catch(Unpaired e){
    secret="";version="";current=null;getPreferences(0).edit().remove("secret").remove("pairQr").remove("pairCode").apply();new AtomicFile(new File(getFilesDir(),"manifest.json")).delete();
    ui.post(()->{stopPlayback();message("Pantalla desvinculada\nGenerando un nuevo código…");});
-  }catch(Exception e){lastError=e.getMessage()==null?"Error de sincronización":e.getMessage();if(current==null)ui.post(()->{if(!playing)message("No se pudo conectar\nSe intentará de nuevo automáticamente");});try{if(!secret.isEmpty())request("/api/player/heartbeat",new JSONObject().put("version",version).put("error",lastError));}catch(Exception ignored){}}
+   return false;
+  }catch(Exception e){lastError=e.getMessage()==null?"Error de sincronización":e.getMessage();if(current==null)ui.post(()->{if(!playing)message("No se pudo conectar\nSe intentará de nuevo automáticamente");});try{if(!secret.isEmpty())request("/api/player/heartbeat",new JSONObject().put("version",version).put("error",lastError));}catch(Exception ignored){}return false;}
  }
  // Un item de tipo "live" (canal embebido en una lista, ver
  // deviceManifest()/expand() en server.js) no es un archivo que se

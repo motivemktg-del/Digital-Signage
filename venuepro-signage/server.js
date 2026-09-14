@@ -557,9 +557,35 @@ export function createApp(env = process.env, studioOptions = {}) {
   res.json({id});
  })));
  app.delete('/api/schedules/:id',admin,wrap(managed('schedule.delete',async(req,res)=>{if(!db.prepare('DELETE FROM schedules WHERE id=? AND tenant=?').run(req.params.id,req.user.tenant).changes)throw fail(404,'Programa no encontrado.');res.json({ok:true});})));
+ // Long-polling: antes el reproductor solo preguntaba cada 20s FIJOS, así
+ // que cualquier cambio real (cambiar de canal, apagar la señal en vivo,
+ // una mezcla nueva) tardaba hasta 20s en llegar a la pantalla física por
+ // más rápido que se guardara en el panel. Ahora, si el dispositivo manda
+ // "since" (su última versión conocida) y "wait=1", y el manifiesto
+ // recién calculado sale IGUAL a esa versión, se deja la respuesta
+ // pendiente revisando cada MANIFEST_POLL_MS en vez de contestar ya con
+ // lo mismo de siempre — en cuanto algo cambie de verdad llega casi al
+ // instante; si no cambia nada, se contesta igual pasado MANIFEST_WAIT_MS
+ // (el cliente vuelve a preguntar enseguida, así que no se pierde nada).
+ const sleep=ms=>new Promise(r=>setTimeout(r,ms));
+ // Configurables por env para que las pruebas no tengan que esperar 18s
+ // de verdad — en producción se usan los valores por defecto.
+ const MANIFEST_WAIT_MS=Number(env.MANIFEST_WAIT_MS)||18000,MANIFEST_POLL_MS=Number(env.MANIFEST_POLL_MS)||400;
  app.get('/api/player/manifest',player,wrap(async(req,res)=>{
   const d=req.device;if(!d.tenant){if(d.expires<Date.now())throw fail(410,'Código vencido.');return res.json({paired:false});}
-  res.json(deviceManifest(db,d,origin));
+  const since=typeof req.query.since==='string'?req.query.since:null;
+  let manifest=deviceManifest(db,d,origin);
+  if(req.query.wait==='1'&&since&&manifest.version===since){
+   const deadline=Date.now()+MANIFEST_WAIT_MS;
+   while(Date.now()<deadline){
+    await sleep(MANIFEST_POLL_MS);
+    const fresh=db.prepare('SELECT * FROM devices WHERE id=?').get(d.id);
+    if(!fresh)break; // se desvinculó mientras esperaba
+    manifest=deviceManifest(db,fresh,origin);
+    if(manifest.version!==since)break;
+   }
+  }
+  res.json(manifest);
  }));
  app.post('/api/player/heartbeat',player,(req,res)=>{
   db.prepare('UPDATE devices SET seen=?,version=?,error=? WHERE id=?').run(Date.now(),String(req.body.version||'').slice(0,80),String(req.body.error||'').slice(0,300),req.device.id);res.json({ok:true});
