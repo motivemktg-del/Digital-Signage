@@ -68,7 +68,10 @@ public class MainActivity extends Activity {
  private static org.webrtc.PeerConnectionFactory webrtcFactory;
  private static org.webrtc.EglBase webrtcEglBase;
  private org.webrtc.PeerConnection webrtcPc;
- private org.webrtc.SurfaceViewRenderer webrtcRenderer;
+ // TextureViewRenderer, NO SurfaceViewRenderer — ver la nota larga en
+ // playLiveWebrtc() de por qué. Mismo paquete org.webrtc, mismas
+ // interfaces (VideoSink/RendererCommon), solo cambia cómo dibuja.
+ private org.webrtc.TextureViewRenderer webrtcRenderer;
  // Overlay del mix (logo/promo/texto) — antes SOLO existía como preview
  // CSS en el panel web (mixOverlayHtml() en app.js), nunca se dibujaba en
  // la pantalla real. Es HERMANO de "canvas" dentro de "root" (no hijo),
@@ -290,19 +293,30 @@ public class MainActivity extends Activity {
   livePlayingUrl=webrtcUrl;playing=true;
   ensureWebrtcFactory(getApplicationContext());
   canvas=new FrameLayout(this);canvas.setClipChildren(true);root.addView(canvas);layoutDisplay();
-  webrtcRenderer=new org.webrtc.SurfaceViewRenderer(this);
+  // OJO, esto ya se cambió una vez: se probó con SurfaceViewRenderer +
+  // setZOrderMediaOverlay(false)/setZOrderOnTop(false) para forzar el mix
+  // a dibujarse encima, y en el papel es lo correcto — pero en la pantalla
+  // física real (Google TV / Android TV box) el mix seguía sin verse
+  // aunque sí aparecía en el preview del panel web, incluso con APK
+  // reinstalada limpia. La explicación: SurfaceView no dibuja dentro de la
+  // ventana normal de la app, dibuja en una superficie de video APARTE que
+  // Android compone por fuera (frecuentemente con un plano de hardware
+  // dedicado en cajitas/TV — más barato en batería/GPU). Las flags de
+  // Z-order le piden a ESA composición que vaya detrás, pero en varios
+  // SoCs de set-top-box ese plano de hardware ignora el orden normal de
+  // vistas de todos modos, así que cualquier View agregada encima (el
+  // mixOverlay) puede quedar tapada sin importar qué se le pida.
+  // TextureViewRenderer, en cambio, dibuja el video como una View NORMAL
+  // más dentro del árbol (usa la GPU pero compone junto con el resto de la
+  // ventana) — se apila con mixOverlay/alertOverlay exactamente en el
+  // orden en que se agregan a "root", como CUALQUIER otra vista de esta
+  // pantalla (photo, video de TextureView en RTSP/MP4). Un poco más caro
+  // que SurfaceView, pero en un video de señalización (no un juego a 60fps
+  // exigente) no se nota, y es la única forma de garantizar que el mix se
+  // vea sin depender de cómo cada fabricante de TV box implementó su
+  // compositor de video.
+  webrtcRenderer=new org.webrtc.TextureViewRenderer(this);
   webrtcRenderer.init(webrtcEglBase.getEglBaseContext(),null);
-  // SurfaceViewRenderer es un SurfaceView: dibuja en una superficie APARTE
-  // de la ventana normal, no es una View más del árbol de vistas como
-  // TextureView. Por defecto esa superficie va DETRÁS de la ventana (la
-  // ventana le "perfora un hueco" y compone encima lo que haga falta) —
-  // pero muchas libs de WebRTC la ponen ARRIBA de la ventana para ahorrar
-  // ese costo de composición, lo que deja CUALQUIER vista normal agregada
-  // después (mixOverlay, alertOverlay) dibujada pero invisible, tapada por
-  // el video. Se fuerza explícito a "detrás de la ventana" (el default
-  // correcto) para que las vistas normales sí puedan verse encima.
-  webrtcRenderer.setZOrderMediaOverlay(false);
-  webrtcRenderer.setZOrderOnTop(false);
   canvas.addView(webrtcRenderer,new FrameLayout.LayoutParams(-1,-1,Gravity.CENTER));
   layoutDisplay(); // fija el scalingType (cover/contain) del renderer recién creado
   final boolean[] gaveUp={false};
