@@ -830,13 +830,18 @@ function viewLocationDetail() {
   if (loc === undefined) { ui.route = 'home'; return viewHome(); }
   const devices = remote.devices.filter(d => d.location === loc.id);
   const cams = (remote.ptzCameras || []).filter(c => c.location === loc.id);
-  const chans = (remote.channels || []).filter(c => c.location === loc.id);
+  // Un canal sin ubicación asignada (!c.location) está disponible para
+  // CUALQUIER TV, no solo las de una ubicación puntual — mismo filtro que
+  // ya usa el selector de Fuente de la ficha individual (ver deviceSheet).
+  // Sin este "!c.location ||", los canales de uso general (el caso normal
+  // hoy) no aparecían en este selector — bug reportado.
+  const chans = (remote.channels || []).filter(c => !c.location || c.location === loc.id);
   const selChan = ui.locationSourceChannel ? chans.find(c => c.id === ui.locationSourceChannel) : null;
   const activeCount = selChan ? devices.filter(d => d.liveChannel === selChan.id).length : 0;
   return `<div class="screen">
     <div class="topbar"><div class="back" ${A('goTab', 'home')}>‹</div><div class="title">${esc(loc.name)}</div></div>
     <div class="content">
-      ${loc.id !== null ? locationSourceBlock(chans, selChan, activeCount) : ''}
+      ${locationSourceBlock(chans, selChan, activeCount)}
       <div class="eyebrow">TVs${devices.length ? ' · ' + devices.length : ''}</div>
       ${devices.length === 0 ? emptyState('Sin TVs aquí todavía', 'Empareja una TV y elige esta ubicación, o mueve una existente desde su detalle.') : `<div class="grid-4" style="margin-bottom:20px">${devices.map(d => deviceTile(d, selChan ? selChan.id : null)).join('')}</div>`}
 
@@ -985,13 +990,15 @@ function viewPtz() {
 }
 
 // Tarjeta compacta de TV para la grilla de 4 — mismo previewThumb() de
-// siempre, solo que más chica y con dos gestos en vez de uno:
-//   · toque corto: prende/apaga la fuente seleccionada arriba en ESTA TV
-//     (data-action → toggleDeviceChannel). Sin fuente elegida, no hace nada.
-//   · mantener presionado: abre la ficha completa de la TV (nombre,
-//     ubicación, orientación, etc. — lo que antes abría el toque normal).
-// selectedChannelId null = no hay fuente elegida arriba: se ve igual que
-// antes, solo más chica, sin resaltado ni toque activo.
+// siempre, solo que más chica. Dos formas de abrir la ficha completa
+// (nombre, ubicación, orientación, etc. — la de siempre) para no depender
+// solo de mantener presionado, que en un navegador de celular real puede
+// chocar con gestos propios del sistema: mantener presionado SIEMPRE la
+// abre, y el toque corto TAMBIÉN la abre mientras no haya una fuente
+// elegida arriba (que es el caso normal: recién entras a la ubicación).
+// Con una fuente elegida, el toque corto pasa a prender/apagar ESA fuente
+// en esta TV — para eso mismo existe la grilla — y mantener presionado
+// sigue siendo el camino a la ficha.
 function deviceTile(d, selectedChannelId) {
   const status = deviceStatus(d);
   const playlist = remote.playlists.find(p => p.id === d.playlist);
@@ -999,7 +1006,7 @@ function deviceTile(d, selectedChannelId) {
   const firstChannel = firstItem && firstItem.channel ? remote.channels.find(c => c.id === firstItem.channel) : null;
   const firstAsset = firstItem && !firstItem.channel ? remote.assets.find(a => a.id === firstItem.asset) : null;
   const active = selectedChannelId && d.liveChannel === selectedChannelId;
-  const tapAttrs = selectedChannelId ? A('toggleDeviceChannel', `${d.id}:${selectedChannelId}`) : '';
+  const tapAttrs = selectedChannelId ? A('toggleDeviceChannel', `${d.id}:${selectedChannelId}`) : A('openDevice', d.id);
   return `<div class="card row-tap" style="overflow:hidden;position:relative;${active ? 'box-shadow:0 0 0 2px var(--accent)' : ''}" ${tapAttrs} data-longpress="openDevice" data-longpress-arg="${esc(d.id)}">
     ${d.alert ? `<div title="${esc(d.alert.text)}" style="position:absolute;top:4px;right:4px;z-index:1;font-size:11px;line-height:1;filter:drop-shadow(0 1px 2px rgba(0,0,0,.5))">🚨</div>` : ''}
     ${previewThumb(d, firstAsset, firstChannel)}
