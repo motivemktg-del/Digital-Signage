@@ -30,7 +30,7 @@ export function deviceManifest(db, d, origin) {
 // que basta con que el VPS pueda alcanzarla (misma LAN, o vía Tailscale).
 // No sirve para páginas tipo stream.html de go2rtc (esas cargan JS propio
 // y abren su propio WebSocket) — la URL debe ser el endpoint de video
-// puro, ej. http://<host>:1984/api/stream.mjpeg?src=NOMBRE.
+// puro, ej. http://<host>:1984/api/stream.mp4?src=NOMBRE.
 async function proxyLiveFeed(url, req, res) {
  const controller = new AbortController();
  req.on('close', () => controller.abort());

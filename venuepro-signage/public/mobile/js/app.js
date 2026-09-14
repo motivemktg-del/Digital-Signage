@@ -119,7 +119,7 @@ const actions = {
     const name = prompt('Nombre de la cámara (ej. PTZ Escenario):'); if (!name) return;
     const onvifUrl = prompt('URL ONVIF (xAddr) — ej. http://192.168.1.41/onvif/device_service. Déjalo vacío si no la tienes aún:') || null;
     const rtspUrl = prompt('URL RTSP del video (opcional, para el agente local):') || null;
-    const viewUrl = prompt('URL de VIDEO puro (no la página del visor) — ej. http://192.168.1.10:1984/api/stream.mjpeg?src=ptz1 de go2rtc. El panel la trae a través del servidor, así que evita páginas como stream.html (esas abren su propio WebSocket). Déjalo vacío si no la tienes aún:') || null;
+    const viewUrl = prompt('URL de VIDEO puro (no la página del visor) — ej. http://192.168.1.10:1984/api/stream.mp4?src=ptz1 de go2rtc. El panel la trae a través del servidor, así que evita páginas como stream.html (esas abren su propio WebSocket). Déjalo vacío si no la tienes aún:') || null;
     await run(createPtzCamera({ name, location: locationId, onvifUrl, rtspUrl, viewUrl }), 'Cámara agregada');
   },
   async deletePtzCameraNow(id) {
@@ -285,7 +285,7 @@ const actions = {
   async setLiveSourceNow(id) {
     const d = remote.devices.find(d => d.id === id);
     const current = d.liveSource || '';
-    const url = prompt('URL de VIDEO puro de go2rtc (no la página del visor) — ej. http://192.168.1.10:1984/api/stream.mjpeg?src=mivideo. El panel la trae a través del servidor (evita mixed content y CSP), así que no uses stream.html. Déjalo vacío para quitarla:', current);
+    const url = prompt('URL de VIDEO puro de go2rtc (no la página del visor) — ej. http://192.168.1.10:1984/api/stream.mp4?src=mivideo. El panel la trae a través del servidor (evita mixed content y CSP), así que no uses stream.html. Déjalo vacío para quitarla:', current);
     if (url === null) return; // canceló
     await run(setLiveSource(id, url.trim() || null), url.trim() ? 'Fuente en vivo asignada' : 'Fuente en vivo quitada');
   },
@@ -658,7 +658,7 @@ function viewPtz() {
       <div style="font:400 10px var(--mono);color:var(--ink-faint);margin-bottom:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${cam.onvif_url ? 'ONVIF · ' + esc(cam.onvif_url) : 'Sin URL ONVIF configurada todavía'}</div>
 
       <div style="position:relative;aspect-ratio:16/9;border-radius:14px;overflow:hidden;background:repeating-linear-gradient(135deg,#242830 0 7px,#1c1f25 7px 14px);margin-bottom:7px">
-        ${cam.view_url ? `<img src="/api/ptz-cameras/${esc(cam.id)}/live-feed" style="position:absolute;inset:0;width:100%;height:100%;object-fit:cover" alt="video PTZ"><div class="badge-live" style="position:absolute;top:10px;left:10px"><div class="dot dot-sm" style="background:var(--red)"></div><span>EN DIRECTO</span></div>` : `<div style="position:absolute;inset:0;display:flex;align-items:center;justify-content:center;font:500 10px var(--mono);color:var(--ink-faint);text-align:center;padding:0 16px">sin URL de video configurada</div>`}
+        ${cam.view_url ? `<video autoplay muted playsinline src="/api/ptz-cameras/${esc(cam.id)}/live-feed" style="position:absolute;inset:0;width:100%;height:100%;object-fit:cover"></video><div class="badge-live" style="position:absolute;top:10px;left:10px"><div class="dot dot-sm" style="background:var(--red)"></div><span>EN DIRECTO</span></div>` : `<div style="position:absolute;inset:0;display:flex;align-items:center;justify-content:center;font:500 10px var(--mono);color:var(--ink-faint);text-align:center;padding:0 16px">sin URL de video configurada</div>`}
         <div style="position:absolute;top:50%;left:50%;width:${frameW};height:${frameW};border:1.5px solid rgba(47,123,246,.85);border-radius:6px;box-shadow:0 0 0 9999px rgba(14,15,18,.45);transform:translate(-50%,-50%) translate(${s.x}px,${s.y}px);transition:all .22s cubic-bezier(.22,.9,.3,1)"></div>
         <div style="position:absolute;bottom:11px;right:11px;padding:4px 9px;border-radius:6px;background:rgba(14,15,18,.84);font:600 9.5px var(--mono);color:#c4c9cf">${s.zoom.toFixed(1)}×</div>
       </div>
@@ -751,11 +751,11 @@ function bigPreview(d) {
   // directamente (chocaría con contenido mixto y con la CSP del propio
   // backend) — pide /api/devices/:id/live-feed, que es el VPS quien la
   // trae y la repite tal cual. live_source debe ser un endpoint de video
-  // puro (ej. .../api/stream.mjpeg?src=NOMBRE de go2rtc), no una página
+  // puro (ej. .../api/stream.mp4?src=NOMBRE de go2rtc), no una página
   // como stream.html (esa abre su propio WebSocket, que esto no proxea).
   if (d.liveSource) {
     return `<div style="${box}">
-      <img src="/api/devices/${esc(d.id)}/live-feed" style="position:absolute;inset:0;width:100%;height:100%;object-fit:cover" alt="señal en vivo">
+      <video autoplay muted playsinline src="/api/devices/${esc(d.id)}/live-feed" style="position:absolute;inset:0;width:100%;height:100%;object-fit:cover"></video>
       ${d.mix ? mixOverlayHtml(d.mix) : ''}
       <div class="badge-live" style="position:absolute;top:10px;left:10px"><div class="dot dot-sm" style="background:var(--red)"></div><span>EN DIRECTO</span></div>
     </div>`;
