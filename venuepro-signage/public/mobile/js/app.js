@@ -658,7 +658,7 @@ function viewPtz() {
       <div style="font:400 10px var(--mono);color:var(--ink-faint);margin-bottom:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${cam.onvif_url ? 'ONVIF · ' + esc(cam.onvif_url) : 'Sin URL ONVIF configurada todavía'}</div>
 
       <div style="position:relative;aspect-ratio:16/9;border-radius:14px;overflow:hidden;background:repeating-linear-gradient(135deg,#242830 0 7px,#1c1f25 7px 14px);margin-bottom:7px">
-        ${cam.view_url ? `<video autoplay muted playsinline src="/api/ptz-cameras/${esc(cam.id)}/live-feed" style="position:absolute;inset:0;width:100%;height:100%;object-fit:cover"></video><div class="badge-live" style="position:absolute;top:10px;left:10px"><div class="dot dot-sm" style="background:var(--red)"></div><span>EN DIRECTO</span></div>` : `<div style="position:absolute;inset:0;display:flex;align-items:center;justify-content:center;font:500 10px var(--mono);color:var(--ink-faint);text-align:center;padding:0 16px">sin URL de video configurada</div>`}
+        ${cam.view_url ? `<video autoplay muted playsinline src="/api/ptz-cameras/${esc(cam.id)}/live-feed" data-snapshot-src="/api/ptz-cameras/${esc(cam.id)}/live-feed?mode=snapshot" style="position:absolute;inset:0;width:100%;height:100%;object-fit:cover"></video><div class="badge-live" style="position:absolute;top:10px;left:10px"><div class="dot dot-sm" style="background:var(--red)"></div><span>EN DIRECTO</span></div>` : `<div style="position:absolute;inset:0;display:flex;align-items:center;justify-content:center;font:500 10px var(--mono);color:var(--ink-faint);text-align:center;padding:0 16px">sin URL de video configurada</div>`}
         <div style="position:absolute;top:50%;left:50%;width:${frameW};height:${frameW};border:1.5px solid rgba(47,123,246,.85);border-radius:6px;box-shadow:0 0 0 9999px rgba(14,15,18,.45);transform:translate(-50%,-50%) translate(${s.x}px,${s.y}px);transition:all .22s cubic-bezier(.22,.9,.3,1)"></div>
         <div style="position:absolute;bottom:11px;right:11px;padding:4px 9px;border-radius:6px;background:rgba(14,15,18,.84);font:600 9.5px var(--mono);color:#c4c9cf">${s.zoom.toFixed(1)}×</div>
       </div>
@@ -755,7 +755,7 @@ function bigPreview(d) {
   // como stream.html (esa abre su propio WebSocket, que esto no proxea).
   if (d.liveSource) {
     return `<div style="${box}">
-      <video autoplay muted playsinline src="/api/devices/${esc(d.id)}/live-feed" style="position:absolute;inset:0;width:100%;height:100%;object-fit:cover"></video>
+      <video autoplay muted playsinline src="/api/devices/${esc(d.id)}/live-feed" data-snapshot-src="/api/devices/${esc(d.id)}/live-feed?mode=snapshot" style="position:absolute;inset:0;width:100%;height:100%;object-fit:cover"></video>
       ${d.mix ? mixOverlayHtml(d.mix) : ''}
       <div class="badge-live" style="position:absolute;top:10px;left:10px"><div class="dot dot-sm" style="background:var(--red)"></div><span>EN DIRECTO</span></div>
     </div>`;
@@ -1053,7 +1053,7 @@ function assetPreviewOverlay() {
     : `<video src="${assetMediaUrl(a.id)}" controls autoplay playsinline style="max-width:100%;max-height:100%;object-fit:contain;border-radius:10px;display:block"></video>`;
   return `<div class="backdrop" style="background:rgba(6,7,9,.92);z-index:40" ${A('closeAssetPreview')}></div>
   <div style="position:fixed;inset:0;z-index:41;display:flex;align-items:center;justify-content:center;padding:28px;pointer-events:none">
-    <div style="pointer-events:auto;max-width:100%;max-height:100%;position:relative;animation:sheetUp .22s cubic-bezier(.22,.9,.3,1)">
+    <div style="pointer-events:auto;max-width:100%;max-height:100%;position:relative;animation:popUp .2s cubic-bezier(.22,.9,.3,1)">
       ${media}
       <div class="row-tap" title="Cerrar" style="position:absolute;top:-16px;right:-16px;width:32px;height:32px;border-radius:50%;background:var(--card);border:1px solid var(--line);display:flex;align-items:center;justify-content:center;font:600 14px var(--sans)" ${A('closeAssetPreview')}>✕</div>
     </div>
@@ -1415,6 +1415,10 @@ function viewSettings() {
           <div style="position:absolute;top:2px;left:${ui.theme === 'dark' ? '20px' : '2px'};width:20px;height:20px;border-radius:50%;background:#fff;transition:left .15s;box-shadow:0 1px 3px rgba(0,0,0,.3)"></div>
         </div>
       </div>
+      <a class="row card-flat row-tap" href="/downloads/venuepro-signage-test.apk" download style="padding:13px 14px;margin-top:10px;text-decoration:none;color:inherit">
+        <div style="flex:1;min-width:0"><div style="font:600 13px var(--sans)">📱 Descargar APK</div><div style="font:400 10.5px var(--mono);color:var(--ink-dimmer)">Reproductor Android para pantallas nuevas</div></div>
+        <div style="color:var(--ink-faint);font:400 13px var(--sans)">⬇</div>
+      </a>
       <div style="font:400 10px var(--mono);color:var(--ink-dimmer);margin-top:20px;text-align:center">${esc(remote.tenant)} · ${esc(remote.role)}</div>
       <div class="row-tap" style="text-align:center;margin-top:14px;font:600 12px var(--sans);color:var(--red)" ${A('logoutNow')}>Cerrar sesión</div>
     </div>
@@ -1451,6 +1455,31 @@ function render() {
     case 'mix': app.innerHTML = viewMix(); break;
     default: app.innerHTML = viewHome();
   }
+  wireLiveFeedFallbacks();
+}
+
+// Safari a veces simplemente no reproduce el <video> en vivo (MP4 sin
+// duración fija) — si dispara "error", lo reemplazamos por una <img> que
+// se refresca sola cada 1.5s (?mode=snapshot en el mismo proxy). No usa
+// onerror="" inline a propósito — la CSP del backend (script-src 'self',
+// sin unsafe-inline) lo bloquearía; por eso se engancha acá, después de
+// cada render().
+let snapshotTimers = [];
+function wireLiveFeedFallbacks() {
+  snapshotTimers.forEach(t => clearInterval(t));
+  snapshotTimers = [];
+  document.querySelectorAll('video[data-snapshot-src]').forEach(video => {
+    video.addEventListener('error', () => {
+      const img = document.createElement('img');
+      img.setAttribute('style', video.getAttribute('style') || '');
+      img.alt = 'señal en vivo';
+      const base = video.dataset.snapshotSrc;
+      const refresh = () => { img.src = base + (base.includes('?') ? '&' : '?') + 't=' + Date.now(); };
+      refresh();
+      snapshotTimers.push(setInterval(refresh, 1500));
+      video.replaceWith(img);
+    }, { once: true });
+  });
 }
 
 refresh();

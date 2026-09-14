@@ -31,6 +31,16 @@ export function deviceManifest(db, d, origin) {
 // No sirve para páginas tipo stream.html de go2rtc (esas cargan JS propio
 // y abren su propio WebSocket) — la URL debe ser el endpoint de video
 // puro, ej. http://<host>:1984/api/stream.mp4?src=NOMBRE.
+// Safari (iOS) es mucho más estricto que Chrome con video en vivo sin
+// duración fija (MP4 progresivo/fragmentado) — a veces simplemente no
+// reproduce. El respaldo universal es una FOTO que se refresca sola cada
+// pocos segundos: no es tan fluido, pero funciona en cualquier navegador.
+// go2rtc expone la misma señal como foto en /api/frame.jpeg — si la URL
+// guardada sigue el patrón .../api/stream.mp4?src=X, se puede derivar
+// directo sin pedirle al admin que configure una segunda URL.
+function deriveSnapshotUrl(url) {
+ return url.replace(/\/api\/stream\.mp4(\?|$)/, '/api/frame.jpeg$1');
+}
 async function proxyLiveFeed(url, req, res) {
  const controller = new AbortController();
  req.on('close', () => controller.abort());
@@ -155,7 +165,7 @@ export function createApp(env = process.env, studioOptions = {}) {
   const d=db.prepare('SELECT live_source FROM devices WHERE id=? AND tenant=?').get(req.params.id,req.user.tenant);
   if(!d)throw fail(404,'Pantalla no encontrada.');
   if(!d.live_source)throw fail(409,'Esta pantalla no tiene una señal en vivo configurada.');
-  await proxyLiveFeed(d.live_source,req,res);
+  await proxyLiveFeed(req.query.mode==='snapshot'?deriveSnapshotUrl(d.live_source):d.live_source,req,res);
  }));
  // Mezcla sobre la señal en vivo — igual que live_source, es control-plane
  // puro: guardamos la intención (layout + qué promo + si va mudo) y quien
@@ -261,7 +271,7 @@ export function createApp(env = process.env, studioOptions = {}) {
   const cam=db.prepare('SELECT view_url FROM ptz_cameras WHERE id=? AND tenant=?').get(req.params.id,req.user.tenant);
   if(!cam)throw fail(404,'Cámara no encontrada.');
   if(!cam.view_url)throw fail(409,'Esta cámara no tiene una URL de video configurada.');
-  await proxyLiveFeed(cam.view_url,req,res);
+  await proxyLiveFeed(req.query.mode==='snapshot'?deriveSnapshotUrl(cam.view_url):cam.view_url,req,res);
  }));
  app.post('/api/ptz-cameras/:id/presets',admin,wrap(managed('ptz.savePreset',async(req,res)=>{
   const cam=db.prepare('SELECT * FROM ptz_cameras WHERE id=? AND tenant=?').get(req.params.id,req.user.tenant);if(!cam)throw fail(404,'Cámara no encontrada.');

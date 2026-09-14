@@ -17,6 +17,20 @@ function fakeUpstream(status, contentType, body) {
   });
 }
 
+// Simula go2rtc de verdad: sirve distinto contenido en /api/stream.mp4 y
+// /api/frame.jpeg (para probar que ?mode=snapshot pide la foto, no el video).
+function fakeGo2rtc() {
+  return new Promise(resolve => {
+    const server = createServer((req, res) => {
+      const path = req.url.split('?')[0];
+      if (path === '/api/stream.mp4') { res.writeHead(200, { 'Content-Type': 'video/mp4' }); res.end('fake-mp4-bytes'); }
+      else if (path === '/api/frame.jpeg') { res.writeHead(200, { 'Content-Type': 'image/jpeg' }); res.end('fake-jpeg-bytes'); }
+      else { res.writeHead(404); res.end(); }
+    });
+    server.listen(0, '127.0.0.1', () => resolve(server));
+  });
+}
+
 test('Proxy de video en vivo (/live-feed): mismo origen, sin exponer la URL de la LAN al navegador', async () => {
   const dir = await mkdtemp(join(tmpdir(), 'signage-livefeed-test-'));
   const { app, db } = createApp({ STORAGE_MODE: 'local', PUBLIC_URL: 'http://localhost:3080', DATA_DIR: dir });
@@ -24,6 +38,7 @@ test('Proxy de video en vivo (/live-feed): mismo origen, sin exponer la URL de l
   const base = 'http://127.0.0.1:' + server.address().port;
   const upstream = await fakeUpstream(200, 'image/jpeg', Buffer.from('fake-mjpeg-bytes'));
   const upstreamUrl = `http://127.0.0.1:${upstream.address().port}/frame.jpg`;
+  let go2rtc;
   async function req(path, { body, cookie, method } = {}) {
     const r = await fetch(base + path, {
       method: method || (body === undefined ? 'GET' : 'POST'),
@@ -60,6 +75,19 @@ test('Proxy de video en vivo (/live-feed): mismo origen, sin exponer la URL de l
     assert.equal(fed.headers.get('content-type'), 'image/jpeg');
     assert.equal(fed.buf.toString(), 'fake-mjpeg-bytes');
 
+    // ?mode=snapshot deriva /api/stream.mp4 -> /api/frame.jpeg en la misma URL,
+    // para el respaldo de Safari (no reproduce MP4 en vivo sin duración fija)
+    go2rtc = await fakeGo2rtc();
+    const go2rtcUrl = `http://127.0.0.1:${go2rtc.address().port}/api/stream.mp4?src=mivideo`;
+    await req(`/api/devices/${deviceId}/live-source`, { cookie: a, body: { url: go2rtcUrl } });
+    const video = await req(`/api/devices/${deviceId}/live-feed`, { cookie: a });
+    assert.equal(video.buf.toString(), 'fake-mp4-bytes');
+    const snapshot = await req(`/api/devices/${deviceId}/live-feed?mode=snapshot`, { cookie: a });
+    assert.equal(snapshot.status, 200);
+    assert.equal(snapshot.headers.get('content-type'), 'image/jpeg');
+    assert.equal(snapshot.buf.toString(), 'fake-jpeg-bytes');
+    go2rtc.close();
+
     // Si la cámara está caída, el proxy responde 502 (no cuelga ni revienta)
     const dead = await fakeUpstream(200, 'image/jpeg', Buffer.from('x'));
     const deadUrl = `http://127.0.0.1:${dead.address().port}/x`;
@@ -67,6 +95,6 @@ test('Proxy de video en vivo (/live-feed): mismo origen, sin exponer la URL de l
     await req(`/api/devices/${deviceId}/live-source`, { cookie: a, body: { url: deadUrl } });
     assert.equal((await req(`/api/devices/${deviceId}/live-feed`, { cookie: a })).status, 502);
   } finally {
-    server.close(); upstream.close(); await rm(dir, { recursive: true, force: true });
+    server.close(); upstream.close(); go2rtc.close?.(); await rm(dir, { recursive: true, force: true });
   }
 });

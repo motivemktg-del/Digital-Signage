@@ -111,7 +111,15 @@ body{
 /* Sheets / modals ------------------------------------------------------------ */
 .backdrop{position:fixed; inset:0; background:rgba(8,9,11,.62); animation:fadeIn .16s ease; z-index:20}
 @keyframes fadeIn{from{opacity:0}to{opacity:1}}
-@keyframes sheetUp{from{transform:translateY(100%)}to{transform:translateY(0)}}
+/* El sheet se centra con left:50%+transform:translateX(-50%) — la
+   animación tiene que incluir ESE mismo translateX en cada cuadro,
+   porque animar "transform" reemplaza el valor entero (no lo combina
+   con el de la regla base), si no se pierde el centrado mientras anima
+   y se ve salir "de lado" en vez de derecho desde abajo. */
+@keyframes sheetUp{from{transform:translateX(-50%) translateY(100%)}to{transform:translateX(-50%) translateY(0)}}
+/* Para elementos que NO se centran con translateX (ej. el lightbox,
+   centrado por flexbox del contenedor padre) — solo sube, sin ese ajuste. */
+@keyframes popUp{from{transform:translateY(24px);opacity:0}to{transform:translateY(0);opacity:1}}
 .sheet{
   position:fixed; left:50%; transform:translateX(-50%); bottom:0; width:100%; max-width:520px;
   background:var(--card); border-top:1px solid var(--line); border-radius:22px 22px 0 0;
