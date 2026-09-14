@@ -55,6 +55,12 @@ let sheetEntering = false;
 
 function esc(s) { return String(s == null ? '' : s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c])); }
 function A(action, arg) { return `data-action="${action}" data-arg="${esc(arg)}"`; }
+// Enlace de "eliminar" al FONDO de un editor, lejos de cualquier botón de
+// uso frecuente (Cerrar, Guardar) — a propósito: ponerlo pegado a Cerrar
+// (como estaba antes) hace fácil tocar el equivocado por accidente.
+function dangerLink(label, action, arg) {
+  return `<div class="row-tap" style="text-align:center;padding:12px 0;margin-top:14px;font:600 12px var(--sans);color:var(--red)" ${A(action, arg)}>${esc(label)}</div>`;
+}
 function fmtTime(ms) { if (!ms) return 'nunca'; const s = Math.round((Date.now() - ms) / 1000); if (s < 60) return `hace ${s}s`; if (s < 3600) return `hace ${Math.round(s / 60)}m`; return `hace ${Math.round(s / 3600)}h`; }
 
 function showToast(msg, isError) {
@@ -741,7 +747,6 @@ function locationEditor(d) {
     <div class="sheet-grip"></div>
     <div class="row" style="gap:8px;margin-bottom:14px">
       <div style="font:700 18px var(--sans);flex:1;min-width:0">${d.id ? 'Editar ubicación' : 'Nueva ubicación'}</div>
-      ${d.id ? `<div class="row-tap" title="Eliminar ubicación" style="width:30px;height:30px;border-radius:9px;flex:none;display:flex;align-items:center;justify-content:center;background:rgba(242,99,90,.12)" ${A('deleteLocationFromEditor')}>🗑️</div>` : ''}
       <div class="row-tap" title="Cerrar" style="width:30px;height:30px;border-radius:9px;flex:none;display:flex;align-items:center;justify-content:center;background:var(--card-2);font:600 14px var(--sans)" ${A('cancelLocation')}>✕</div>
     </div>
     <form data-submit="saveLocationDraft">
@@ -750,6 +755,7 @@ function locationEditor(d) {
         <button type="submit" class="btn btn-primary" style="border:none">Guardar</button>
       </div>
     </form>
+    ${d.id ? dangerLink('Eliminar ubicación', 'deleteLocationFromEditor') : ''}
   </div>`;
 }
 
@@ -790,7 +796,6 @@ function ptzCameraEditor(d) {
     <div class="sheet-grip"></div>
     <div class="row" style="gap:8px;margin-bottom:14px">
       <div style="font:700 18px var(--sans);flex:1;min-width:0">${d.id ? 'Editar cámara' : 'Nueva cámara PTZ'}</div>
-      ${d.id ? `<div class="row-tap" title="Eliminar cámara" style="width:30px;height:30px;border-radius:9px;flex:none;display:flex;align-items:center;justify-content:center;background:rgba(242,99,90,.12)" ${A('deletePtzCameraFromEditor')}>🗑️</div>` : ''}
       <div class="row-tap" title="Cerrar" style="width:30px;height:30px;border-radius:9px;flex:none;display:flex;align-items:center;justify-content:center;background:var(--card-2);font:600 14px var(--sans)" ${A('cancelPtzCamera')}>✕</div>
     </div>
     <form data-submit="savePtzCameraDraft">
@@ -802,6 +807,7 @@ function ptzCameraEditor(d) {
         <button type="submit" class="btn btn-primary" style="border:none">Guardar</button>
       </div>
     </form>
+    ${d.id ? dangerLink('Eliminar cámara', 'deletePtzCameraFromEditor') : ''}
   </div>`;
 }
 
@@ -1094,7 +1100,6 @@ function mixTemplateEditor(d) {
     <div class="sheet-grip"></div>
     <div class="row" style="gap:8px;margin-bottom:14px">
       <div style="font:700 18px var(--sans);flex:1;min-width:0">Editar plantilla</div>
-      <div class="row-tap" title="Eliminar plantilla" style="width:30px;height:30px;border-radius:9px;flex:none;display:flex;align-items:center;justify-content:center;background:rgba(242,99,90,.12)" ${A('deleteMixTemplateFromEditor')}>🗑️</div>
       <div class="row-tap" title="Cerrar" style="width:30px;height:30px;border-radius:9px;flex:none;display:flex;align-items:center;justify-content:center;background:var(--card-2);font:600 14px var(--sans)" ${A('cancelMixTemplate')}>✕</div>
     </div>
     <form data-submit="saveMixTemplateDraft">
@@ -1103,6 +1108,7 @@ function mixTemplateEditor(d) {
         <button type="submit" class="btn btn-primary" style="border:none">Guardar</button>
       </div>
     </form>
+    ${dangerLink('Eliminar plantilla', 'deleteMixTemplateFromEditor')}
   </div>`;
 }
 
@@ -1111,12 +1117,11 @@ function deviceSheet() {
   const status = deviceStatus(d);
   const playlist = remote.playlists.find(p => p.id === d.playlist);
   return `<div class="backdrop" ${A('closeDevice')}></div>
-  <div class="sheet${sheetEntering ? ' entering' : ''}" style="max-height:90vh">
+  <div class="sheet${sheetEntering ? ' entering' : ''}" style="height:calc(100vh - 10px);max-height:calc(100vh - 10px)">
     <div class="sheet-grip"></div>
     <div class="row" style="gap:8px;margin-bottom:3px">
       <div class="dot" style="background:${STATUS_COLOR[status]}"></div>
       <div style="font:700 19px var(--sans);flex:1;min-width:0">${esc(d.name)}</div>
-      <div class="row-tap" title="Quitar pantalla" style="width:30px;height:30px;border-radius:9px;flex:none;display:flex;align-items:center;justify-content:center;background:rgba(242,99,90,.12)" ${A('revoke', d.id)}>🗑️</div>
       <div class="row-tap" title="Cerrar" style="width:30px;height:30px;border-radius:9px;flex:none;display:flex;align-items:center;justify-content:center;background:var(--card-2);font:600 14px var(--sans)" ${A('closeDevice')}>✕</div>
     </div>
     <div style="font:400 10.5px var(--mono);color:var(--ink-dimmer);margin-bottom:16px">${STATUS_LABEL[status]} · ${fmtTime(d.seen)}${d.error ? ' · ' + esc(d.error) : ''}</div>
@@ -1129,10 +1134,14 @@ function deviceSheet() {
       // esa misma ubicación).
       const chans = (remote.channels || []).filter(c => !c.location || c.location === d.location);
       return `<div class="eyebrow">Fuente</div>
-      <select data-change="setDeviceSource" data-arg="${esc(d.id)}" style="width:100%;padding:11px;border-radius:10px;background:var(--card-2);border:1.5px solid ${d.liveChannel ? 'var(--accent)' : 'var(--line)'};color:var(--ink);margin-bottom:${d.liveSource ? '10px' : '16px'}">
-        <option value="" ${!d.liveChannel ? 'selected' : ''}>▶ Lista de reproducción${playlist ? ' — ' + esc(playlist.name) : ''}</option>
-        ${chans.map(c => `<option value="${esc(c.id)}" ${d.liveChannel === c.id ? 'selected' : ''}>🔴 ${esc(c.name)}</option>`).join('')}
-      </select>
+      <div class="row" style="gap:8px;margin-bottom:${d.liveSource ? '10px' : '16px'}">
+        <select data-change="setDeviceSource" data-arg="${esc(d.id)}" style="flex:1;min-width:0;padding:11px;border-radius:10px;background:var(--card-2);border:1.5px solid ${d.liveChannel ? 'var(--accent)' : 'var(--line)'};color:var(--ink)">
+          <option value="" ${!d.liveChannel ? 'selected' : ''}>▶ Lista de reproducción${playlist ? ' — ' + esc(playlist.name) : ''}</option>
+          ${chans.map(c => `<option value="${esc(c.id)}" ${d.liveChannel === c.id ? 'selected' : ''}>🔴 ${esc(c.name)}</option>`).join('')}
+        </select>
+        <div class="row-tap" title="${d.paused ? 'Reanudar' : 'Pausar'}" style="padding:11px;border-radius:10px;flex:none;display:flex;align-items:center;justify-content:center;background:var(--card-2);border:1px solid var(--line);font-size:15px;line-height:1" ${A('togglePause', d.id)}>${d.paused ? '▶️' : '⏸️'}</div>
+        <div class="row-tap" title="Sincronizar" style="padding:11px;border-radius:10px;flex:none;display:flex;align-items:center;justify-content:center;background:var(--card-2);border:1px solid var(--line);font-size:15px;line-height:1" ${A('syncNow', d.id)}>🔄</div>
+      </div>
       ${chans.length === 0 ? `<div class="row card-flat row-tap" style="padding:11px 14px;opacity:.6;margin-bottom:16px" ${A('goTab', 'content')}>
         <div style="flex:1;min-width:0"><div style="font:600 12.5px var(--sans);margin-bottom:2px">Sin canales todavía</div><div style="font:400 10.5px var(--mono);color:var(--ink-dimmer)">configúralos en Contenido → Canales</div></div>
       </div>` : ''}`;
@@ -1188,10 +1197,7 @@ function deviceSheet() {
       </div>` : ''}`;
     })()}
 
-    <div class="row" style="gap:8px">
-      <div class="btn btn-ghost row-tap" style="flex:1;padding:11px 0;font-size:12.5px" ${A('togglePause', d.id)}>${d.paused ? 'Reanudar' : 'Pausar'}</div>
-      <div class="btn btn-ghost row-tap" style="flex:1;padding:11px 0;font-size:12.5px" ${A('syncNow', d.id)}>Sincronizar</div>
-    </div>
+    <div class="row-tap" style="text-align:center;padding:12px 0;margin-top:4px;font:600 12px var(--sans);color:var(--red)" ${A('revoke', d.id)}>Quitar esta pantalla</div>
   </div>`;
 }
 
@@ -1382,7 +1388,6 @@ function channelEditor(d) {
     <div class="sheet-grip"></div>
     <div class="row" style="gap:8px;margin-bottom:14px">
       <div style="font:700 18px var(--sans);flex:1;min-width:0">${d.id ? 'Editar canal' : 'Nuevo canal'}</div>
-      ${d.id ? `<div class="row-tap" title="Eliminar canal" style="width:30px;height:30px;border-radius:9px;flex:none;display:flex;align-items:center;justify-content:center;background:rgba(242,99,90,.12)" ${A('deleteChannelFromEditor')}>🗑️</div>` : ''}
       <div class="row-tap" title="Cerrar" style="width:30px;height:30px;border-radius:9px;flex:none;display:flex;align-items:center;justify-content:center;background:var(--card-2);font:600 14px var(--sans)" ${A('cancelChannel')}>✕</div>
     </div>
     <form data-submit="saveChannelDraft">
@@ -1392,6 +1397,7 @@ function channelEditor(d) {
         <button type="submit" class="btn btn-primary" style="border:none">Guardar</button>
       </div>
     </form>
+    ${d.id ? dangerLink('Eliminar canal', 'deleteChannelFromEditor') : ''}
   </div>`;
 }
 
@@ -1401,7 +1407,6 @@ function assetFolderEditor(d) {
     <div class="sheet-grip"></div>
     <div class="row" style="gap:8px;margin-bottom:14px">
       <div style="font:700 18px var(--sans);flex:1;min-width:0">${d.id ? 'Editar carpeta' : 'Nueva carpeta'}</div>
-      ${d.id ? `<div class="row-tap" title="Eliminar carpeta" style="width:30px;height:30px;border-radius:9px;flex:none;display:flex;align-items:center;justify-content:center;background:rgba(242,99,90,.12)" ${A('deleteAssetFolderFromEditor')}>🗑️</div>` : ''}
       <div class="row-tap" title="Cerrar" style="width:30px;height:30px;border-radius:9px;flex:none;display:flex;align-items:center;justify-content:center;background:var(--card-2);font:600 14px var(--sans)" ${A('cancelAssetFolder')}>✕</div>
     </div>
     <form data-submit="saveAssetFolderDraft">
@@ -1410,6 +1415,7 @@ function assetFolderEditor(d) {
         <button type="submit" class="btn btn-primary" style="border:none">Guardar</button>
       </div>
     </form>
+    ${d.id ? dangerLink('Eliminar carpeta', 'deleteAssetFolderFromEditor') : ''}
   </div>`;
 }
 
@@ -1440,7 +1446,6 @@ function playlistEditor(d) {
     <div class="sheet-grip"></div>
     <div class="row" style="gap:8px;margin-bottom:14px">
       <div style="font:700 18px var(--sans);flex:1;min-width:0">${d.id ? 'Editar lista' : 'Nueva lista'}</div>
-      ${d.id ? `<div class="row-tap" title="Eliminar lista" style="width:30px;height:30px;border-radius:9px;flex:none;display:flex;align-items:center;justify-content:center;background:rgba(242,99,90,.12)" ${A('deletePlaylistFromEditor')}>🗑️</div>` : ''}
       <div class="row-tap" title="Cerrar" style="width:30px;height:30px;border-radius:9px;flex:none;display:flex;align-items:center;justify-content:center;background:var(--card-2);font:600 14px var(--sans)" ${A('cancelPlaylist')}>✕</div>
     </div>
     <input value="${esc(d.name)}" placeholder="Nombre de la lista" data-input="setDraftName" style="width:100%;box-sizing:border-box;padding:12px 14px;border-radius:12px;background:var(--card-2);border:1px solid var(--line);color:var(--ink);margin-bottom:14px">
@@ -1463,6 +1468,7 @@ function playlistEditor(d) {
       ${remote.assets.length ? `<optgroup label="Archivos">${remote.assets.map(a => `<option value="asset:${esc(a.id)}">${esc(a.name)}</option>`).join('')}</optgroup>` : ''}
     </select>
     <div class="btn btn-primary" ${A('savePlaylistDraft')}>Guardar lista</div>
+    ${d.id ? dangerLink('Eliminar lista', 'deletePlaylistFromEditor') : ''}
   </div>`;
 }
 
@@ -1505,7 +1511,6 @@ function scheduleEditor(d) {
     <div class="sheet-grip"></div>
     <div class="row" style="gap:8px;margin-bottom:14px">
       <div style="font:700 18px var(--sans);flex:1;min-width:0">${d.id ? 'Editar programa' : 'Nuevo programa'}</div>
-      ${d.id ? `<div class="row-tap" title="Eliminar programa" style="width:30px;height:30px;border-radius:9px;flex:none;display:flex;align-items:center;justify-content:center;background:rgba(242,99,90,.12)" ${A('deleteScheduleFromEditor')}>🗑️</div>` : ''}
       <div class="row-tap" title="Cerrar" style="width:30px;height:30px;border-radius:9px;flex:none;display:flex;align-items:center;justify-content:center;background:var(--card-2);font:600 14px var(--sans)" ${A('cancelSchedule')}>✕</div>
     </div>
     <form data-submit="saveScheduleDraft">
@@ -1521,6 +1526,7 @@ function scheduleEditor(d) {
         <button type="submit" class="btn btn-primary" style="border:none;margin-top:4px">Guardar programa</button>
       </div>
     </form>
+    ${d.id ? dangerLink('Eliminar programa', 'deleteScheduleFromEditor') : ''}
   </div>`;
 }
 
@@ -1585,7 +1591,7 @@ function viewStudioDraft() {
   const c = ui.studioConfig;
   const canGenerate = c && c.enabled && c.verified && c.requestsThisMonth < c.monthlyLimit;
   return `<div class="screen">
-    <div class="topbar" style="justify-content:space-between"><div class="row" style="gap:0"><div class="back" ${A('backToStudio')}>‹</div><div class="title">${esc(d.name)}</div></div><div class="row-tap" title="Eliminar borrador" style="font-size:17px;line-height:1" ${A('deleteStudioDraftFromEditor')}>🗑️</div></div>
+    <div class="topbar"><div class="back" ${A('backToStudio')}>‹</div><div class="title">${esc(d.name)}</div></div>
     <div class="content">
       ${job && job.status === 'ready' ? `<canvas id="studio-canvas" style="width:100%;border-radius:14px;margin-bottom:8px;background:#000"></canvas>
           <div class="btn btn-primary row-tap" style="margin-bottom:16px" ${A('exportStudioNow')}>Guardar en biblioteca</div>`
@@ -1628,6 +1634,7 @@ function viewStudioDraft() {
 
       <div class="btn btn-ghost row-tap" style="margin-bottom:10px" ${A('saveStudioDraftNow')}>Guardar borrador</div>
       ${canGenerate ? `<div class="btn btn-primary row-tap" ${A('generateStudioNow')}>Generar fondo con IA</div>` : `<div style="font:400 11px var(--sans);color:var(--ink-faint);text-align:center">${!c || !c.enabled || !c.verified ? 'Configura y verifica Estudio IA primero.' : 'Cupo mensual agotado.'}</div>`}
+      ${dangerLink('Eliminar borrador', 'deleteStudioDraftFromEditor')}
     </div>
     ${toastHtml()}
   </div>`;
