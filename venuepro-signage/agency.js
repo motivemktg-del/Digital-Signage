@@ -33,10 +33,10 @@ export function installAgency(app,db,env,origin,deviceManifest){
    if(draft.revision!==b.revision)return res.status(409).json({error:'El borrador cambió.'});
    db.prepare('DELETE FROM agency_uploads WHERE expires<?').run(Date.now());const ticket=token();db.prepare("INSERT INTO agency_uploads VALUES (?,?,?,?,'image/png',?,'studio.export',?)").run(hash(ticket),b.external,link.tenant,b.id,Date.now()+60000,b.revision);return res.json({ticket});
   }
-  if(['studio.getConfig','studio.config','studio.verify','studio.drafts','studio.draft','studio.create','studio.update','studio.jobs','studio.retry','studio.generate'].includes(b.action)){
+  if(['studio.getConfig','studio.config','studio.verify','studio.drafts','studio.draft','studio.create','studio.update','studio.deleteDraft','studio.jobs','studio.retry','studio.generate'].includes(b.action)){
    try{return await app.locals.runManagement(b.action,link.tenant,b,req,res);}catch(error){return next(error);}
   }
-  if(['playlist.save','playlist.delete','asset.rename','asset.archive','pair.claim','location.create','device.location','device.display','device.liveSource','device.playback','device.sync','device.revoke','schedule.save','schedule.delete'].includes(b.action)){
+  if(['playlist.save','playlist.delete','asset.rename','asset.archive','pair.claim','location.create','location.delete','device.location','device.display','device.liveSource','device.playback','device.sync','device.revoke','schedule.save','schedule.delete'].includes(b.action)){
    try{return await app.locals.runManagement(b.action,link.tenant,b,req,res);}catch(error){return next(error);}
   }
   return res.status(400).json({error:'Acción no permitida.'});

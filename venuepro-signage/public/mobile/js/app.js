@@ -88,6 +88,11 @@ const actions = {
     await run(createLocation(name), 'Ubicación creada');
   },
   goLocations() { ui.route = 'locations'; render(); },
+  async deleteLocationNow(id) {
+    const loc = remote.locations.find(l => l.id === id);
+    if (!confirm(`¿Eliminar la ubicación "${loc ? loc.name : ''}"? Esto no se puede deshacer.`)) return;
+    await run(deleteLocation(id), 'Ubicación eliminada');
+  },
   onvifSoon() { showToast('Canal ONVIF: próximamente'); },
   openLocation(id) { ui.currentLocationId = id; ui.route = 'locationDetail'; render(); },
 
@@ -180,6 +185,20 @@ const actions = {
         showToast('Guardado en tu biblioteca'); await refresh(); actions.backToStudio();
       } catch (e) { showToast(e.message, true); }
     }, 'image/png');
+  },
+
+  // -- fuente en vivo local (backend real, ver server.js) --
+  async setLiveSourceNow(id) {
+    const d = remote.devices.find(d => d.id === id);
+    const current = d.liveSource || '';
+    const url = prompt('URL del stream en la LAN del local (ej. http://192.168.1.10:1984/stream.html?src=mivideo&mode=webrtc). Déjalo vacío para quitarla:', current);
+    if (url === null) return; // canceló
+    await run(setLiveSource(id, url.trim() || null), url.trim() ? 'Fuente en vivo asignada' : 'Fuente en vivo quitada');
+  },
+  mixSoon() { showToast('Mezclar sobre la señal: próximamente'); },
+  async useDefaultPlaylistSource(id) {
+    const d = remote.devices.find(d => d.id === id); if (!d.liveSource) return;
+    await run(setLiveSource(id, null), 'Fuente en vivo quitada');
   },
 
   // -- emparejar --
@@ -371,7 +390,7 @@ function viewHome() {
       </div>
       ${devices.length === 0 ? emptyState('Sin pantallas todavía', 'Empareja tu primera pantalla para empezar.') : groups.map(([loc, ds]) => `
         <div class="eyebrow">${esc(loc.name)} · ${ds.length}</div>
-        <div class="stack" style="margin-bottom:18px">${ds.map(deviceRow).join('')}</div>
+        <div class="grid-2" style="margin-bottom:18px">${ds.map(deviceRow).join('')}</div>
       `).join('')}
     </div>
     ${tabbar()}
@@ -392,11 +411,12 @@ function viewLocations() {
             <div style="font:600 13px var(--sans)">${esc(l.name)}</div>
             <div style="font:400 10.5px var(--mono);color:var(--ink-dimmer)">${counts.get(l.id) || 0} pantalla${counts.get(l.id) === 1 ? '' : 's'}</div>
           </div>
+          <div class="row-tap" title="Eliminar ubicación" style="width:28px;height:28px;border-radius:8px;flex:none;display:flex;align-items:center;justify-content:center;background:rgba(242,99,90,.12);margin-right:6px" ${A('deleteLocationNow', l.id)}>🗑️</div>
           <div style="color:var(--ink-faint);font:400 13px var(--sans)">›</div>
         </div>`).join('')}
       </div>`}
       <div class="btn btn-ghost row-tap" ${A('addLocation')}>+ Añadir ubicación</div>
-      <div style="font:400 11px/1.5 var(--sans);color:var(--ink-faint);margin-top:14px">Por ahora solo se pueden crear ubicaciones aquí — renombrar o eliminar una todavía no lo soporta el backend.</div>
+      <div style="font:400 11px/1.5 var(--sans);color:var(--ink-faint);margin-top:14px">Puedes borrar una ubicación vacía. Renombrarla todavía no lo soporta el backend.</div>
     </div>
     ${toastHtml()}
   </div>`;
@@ -409,29 +429,28 @@ function viewLocationDetail() {
   return `<div class="screen">
     <div class="topbar"><div class="back" ${A('goLocations')}>‹</div><div class="title">${esc(loc.name)}</div></div>
     <div class="content">
-      ${devices.length === 0 ? emptyState('Sin pantallas aquí todavía', 'Empareja una pantalla y elige esta ubicación, o mueve una existente desde su detalle.') : `<div class="stack">${devices.map(deviceRow).join('')}</div>`}
+      ${devices.length === 0 ? emptyState('Sin pantallas aquí todavía', 'Empareja una pantalla y elige esta ubicación, o mueve una existente desde su detalle.') : `<div class="grid-2">${devices.map(deviceRow).join('')}</div>`}
     </div>
     ${ui.detailDeviceId ? deviceSheet() : ''}
     ${toastHtml()}
   </div>`;
 }
 
+// Tarjeta de pantalla — mismo patrón visual que las tarjetas de Contenido
+// (miniatura 16:9 arriba, texto abajo), en vez de una fila.
 function deviceRow(d) {
   const status = deviceStatus(d);
   const playlist = remote.playlists.find(p => p.id === d.playlist);
-  // No es un preview EN VIVO de verdad (el player no manda capturas de
-  // pantalla) — es el primer archivo de la lista asignada, que es lo que
-  // debería estar mostrando la pantalla ahora mismo salvo que un horario
-  // esté activo encima.
   const firstAsset = playlist && playlist.items[0] ? remote.assets.find(a => a.id === playlist.items[0].asset) : null;
-  return `<div class="card row row-tap" style="padding:13px 14px" ${A('openDevice', d.id)}>
-    <div class="dot" style="background:${STATUS_COLOR[status]}"></div>
-    <div style="flex:1;min-width:0">
-      <div style="font:600 13px var(--sans);margin-bottom:2px">${esc(d.name)}${d.paused ? ' · ⏸' : ''}</div>
-      <div style="font:400 10.5px var(--mono);color:var(--ink-dimmer);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${playlist ? esc(playlist.name) : 'sin lista'} · ${fmtTime(d.seen)}</div>
+  return `<div class="card row-tap" style="overflow:hidden" ${A('openDevice', d.id)}>
+    ${previewThumb(d, firstAsset)}
+    <div style="padding:9px 10px 11px">
+      <div class="row" style="gap:6px;margin-bottom:3px">
+        <div class="dot dot-sm" style="background:${STATUS_COLOR[status]}"></div>
+        <div style="font:600 12.5px var(--sans);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(d.name)}${d.paused ? ' ⏸' : ''}</div>
+      </div>
+      <div style="font:400 10px var(--mono);color:var(--ink-dimmer);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${d.liveSource ? 'señal en vivo' : playlist ? esc(playlist.name) : 'sin lista'} · ${fmtTime(d.seen)}</div>
     </div>
-    ${firstAsset ? previewThumb(firstAsset) : ''}
-    <div style="color:var(--ink-faint);font:400 13px var(--sans)">›</div>
   </div>`;
 }
 
@@ -440,9 +459,19 @@ function deviceRow(d) {
 // "Canal ONVIF" u otra señal externa), este mismo cuadro sería donde se
 // mostraría ese stream — es el hueco que se deja para eso.
 function bigPreview(d) {
+  const box = 'width:100%;aspect-ratio:9/16;max-height:340px;border-radius:14px;overflow:hidden;background:repeating-linear-gradient(135deg,#242830 0 7px,#1c1f25 7px 14px);display:flex;align-items:center;justify-content:center;margin-bottom:14px;position:relative';
+  // Fuente en vivo real (backend): si el dispositivo tiene live_source
+  // asignado, esta ventana muestra ESE stream — el navegador de quien mira
+  // el panel tiene que poder llegar a esa URL (misma LAN, o vía un túnel
+  // tipo Tailscale si es remoto). No pasa por el VPS para nada del video.
+  if (d.liveSource) {
+    return `<div style="${box}">
+      <iframe src="${esc(d.liveSource)}" allow="autoplay" style="position:absolute;inset:0;width:100%;height:100%;border:0" title="stream en vivo"></iframe>
+      <div class="badge-live" style="position:absolute;top:10px;left:10px"><div class="dot dot-sm" style="background:var(--red)"></div><span>EN DIRECTO</span></div>
+    </div>`;
+  }
   const playlist = remote.playlists.find(p => p.id === d.playlist);
   const asset = playlist && playlist.items[0] ? remote.assets.find(a => a.id === playlist.items[0].asset) : null;
-  const box = 'width:100%;aspect-ratio:9/16;max-height:340px;border-radius:14px;overflow:hidden;background:repeating-linear-gradient(135deg,#242830 0 7px,#1c1f25 7px 14px);display:flex;align-items:center;justify-content:center;margin-bottom:14px;position:relative';
   if (!asset) return `<div style="${box}"><span style="font:500 10px var(--mono);color:var(--ink-faint)">sin contenido asignado</span></div>`;
   const media = asset.type.startsWith('image/')
     ? `<img src="${assetMediaUrl(asset.id)}" style="width:100%;height:100%;object-fit:cover">`
@@ -450,8 +479,13 @@ function bigPreview(d) {
   return `<div style="${box}">${media}</div>`;
 }
 
-function previewThumb(a) {
-  const s = 'width:84px;aspect-ratio:16/9;border-radius:9px;object-fit:cover;flex:none;background:#000';
+// d: el dispositivo (para saber si tiene fuente en vivo); a: primer
+// archivo de su lista, o null. No metemos un <iframe> aquí — sería uno
+// por tarjeta en una grilla, muy pesado — solo la etiqueta.
+function previewThumb(d, a) {
+  const s = 'width:100%;aspect-ratio:16/9;object-fit:cover;display:block;background:#000';
+  if (d.liveSource) return `<div class="thumb" style="aspect-ratio:16/9"><span style="color:var(--red);font:600 10px var(--mono);letter-spacing:.06em">● EN VIVO</span></div>`;
+  if (!a) return `<div class="thumb" style="aspect-ratio:16/9"><span>sin contenido</span></div>`;
   return a.type.startsWith('image/')
     ? `<img src="${assetMediaUrl(a.id)}" style="${s}">`
     : `<video src="${assetMediaUrl(a.id)}#t=0.5" preload="metadata" muted playsinline style="${s}"></video>`;
@@ -460,6 +494,7 @@ function previewThumb(a) {
 function deviceSheet() {
   const d = remote.devices.find(d => d.id === ui.detailDeviceId); if (!d) return '';
   const status = deviceStatus(d);
+  const playlist = remote.playlists.find(p => p.id === d.playlist);
   return `<div class="backdrop" ${A('closeDevice')}></div>
   <div class="sheet" style="max-height:90vh">
     <div class="sheet-grip"></div>
@@ -471,7 +506,21 @@ function deviceSheet() {
     <div style="font:400 10.5px var(--mono);color:var(--ink-dimmer);margin-bottom:16px">${STATUS_LABEL[status]} · ${fmtTime(d.seen)}${d.error ? ' · ' + esc(d.error) : ''}</div>
     ${bigPreview(d)}
 
-    <div class="eyebrow">Lista asignada</div>
+    <div class="eyebrow">Fuente</div>
+    <div class="stack" style="margin-bottom:${d.liveSource ? '10px' : '16px'}">
+      <div class="row card-flat row-tap" style="padding:13px 14px;background:${!d.liveSource ? 'rgba(47,123,246,.12)' : 'var(--card-2)'};border:1.5px solid ${!d.liveSource ? 'var(--accent)' : 'var(--line)'}" ${A('useDefaultPlaylistSource', d.id)}>
+        <div style="width:17px;height:17px;border-radius:50%;flex:none;border:1.5px solid ${!d.liveSource ? 'var(--accent)' : 'rgba(255,255,255,.22)'};display:flex;align-items:center;justify-content:center"><div style="width:8px;height:8px;border-radius:50%;background:${!d.liveSource ? 'var(--accent)' : 'transparent'}"></div></div>
+        <div style="flex:1;min-width:0"><div style="font:600 13px var(--sans);margin-bottom:2px">Lista de reproducción</div><div style="font:400 10.5px var(--mono);color:var(--ink-dimmer)">${playlist ? esc(playlist.name) : 'sin asignar'}</div></div>
+      </div>
+      <div class="row card-flat row-tap" style="padding:13px 14px;background:${d.liveSource ? 'rgba(47,123,246,.12)' : 'var(--card-2)'};border:1.5px solid ${d.liveSource ? 'var(--accent)' : 'var(--line)'}" ${A('setLiveSourceNow', d.id)}>
+        <div style="width:17px;height:17px;border-radius:50%;flex:none;border:1.5px solid ${d.liveSource ? 'var(--accent)' : 'rgba(255,255,255,.22)'};display:flex;align-items:center;justify-content:center"><div style="width:8px;height:8px;border-radius:50%;background:${d.liveSource ? 'var(--accent)' : 'transparent'}"></div></div>
+        <div style="flex:1;min-width:0"><div style="font:600 13px var(--sans);margin-bottom:2px">Señal en vivo (LAN)</div><div style="font:400 10.5px var(--mono);color:var(--ink-dimmer);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${d.liveSource ? esc(d.liveSource) : 'toca para configurar'}</div></div>
+        ${d.liveSource ? `<div class="tag" style="background:rgba(242,99,90,.14);color:var(--red)">EN DIRECTO</div>` : ''}
+      </div>
+    </div>
+    ${d.liveSource ? `<div class="row-tap" style="text-align:center;padding:10px 0;border-radius:12px;background:var(--card-2);border:1px solid var(--line);opacity:.55;font:600 12px var(--sans);margin-bottom:16px" ${A('mixSoon')}>Mezclar sobre la señal (próximamente)</div>` : ''}
+
+    <div class="eyebrow">Lista de reproducción</div>
     <div class="row" style="gap:8px;margin-bottom:16px">
       <select style="flex:1;padding:11px;border-radius:10px;background:var(--card-2);border:1px solid var(--line);color:var(--ink)">
         ${remote.playlists.map(p => `<option value="${esc(p.id)}" ${p.id === d.playlist ? 'selected' : ''}>${esc(p.name)}</option>`).join('')}
@@ -587,9 +636,9 @@ function viewContent() {
             : `<video src="${assetMediaUrl(a.id)}#t=0.5" preload="metadata" muted playsinline style="width:100%;aspect-ratio:16/9;object-fit:cover;display:block;background:#000"></video>`}
           <div style="padding:9px 10px">
             <div style="font:600 12px var(--sans);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;margin-bottom:6px">${esc(a.name)}</div>
-            <div class="row" style="gap:6px">
-              <div class="row-tap" style="font:500 10.5px var(--sans);color:var(--ink-dim)" ${A('renameAsset', a.id)}>Renombrar</div>
-              <div class="row-tap" style="font:500 10.5px var(--sans);color:var(--red);margin-left:auto" ${A('archiveAsset', a.id)}>Archivar</div>
+            <div class="row" style="gap:8px">
+              <div class="row-tap" title="Renombrar" ${A('renameAsset', a.id)}>✏️</div>
+              <div class="row-tap" title="Archivar" style="margin-left:auto" ${A('archiveAsset', a.id)}>🗑️</div>
             </div>
           </div>
         </div>`).join('')}

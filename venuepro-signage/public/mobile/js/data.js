@@ -35,6 +35,8 @@ function getState() { return api('/api/state'); }
 // ---- ubicaciones y pantallas -------------------------------------------
 
 function createLocation(name) { return api('/api/locations', { method: 'POST', body: { name } }); }
+function deleteLocation(id) { return api(`/api/locations/${id}`, { method: 'DELETE' }); }
+function deleteStudioDraft(id) { return api(`/api/studio/drafts/${id}`, { method: 'DELETE' }); }
 function setDeviceLocation(id, location) { return api(`/api/devices/${id}/location`, { method: 'POST', body: { location } }); }
 function setDeviceDisplay(id, { orientation, rotation, fit }) { return api(`/api/devices/${id}/display`, { method: 'POST', body: { orientation, rotation, fit } }); }
 function setDevicePlayback(id, paused) { return api(`/api/devices/${id}/playback`, { method: 'POST', body: { paused } }); }
@@ -42,6 +44,7 @@ function syncDevice(id) { return api(`/api/devices/${id}/sync`, { method: 'POST'
 function assignPlaylist(deviceId, playlist) { return api(`/api/devices/${deviceId}/assign`, { method: 'POST', body: { playlist } }); }
 function publishContent(deviceId, payload) { return api(`/api/devices/${deviceId}/content`, { method: 'POST', body: { ...payload, confirm: true } }); }
 function revokeDevice(id) { return api(`/api/devices/${id}`, { method: 'DELETE' }); }
+function setLiveSource(id, url) { return api(`/api/devices/${id}/live-source`, { method: 'POST', body: { url } }); } // url:null quita la fuente en vivo
 
 // ---- emparejar pantalla nueva -------------------------------------------
 

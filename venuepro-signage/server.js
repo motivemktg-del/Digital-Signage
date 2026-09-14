@@ -120,6 +120,11 @@ export function createApp(env = process.env, studioOptions = {}) {
   if(!result.changes) throw fail(400,'Código vencido o ya utilizado.'); res.json({ok:true});
  })));
  app.post('/api/locations',admin,wrap(managed('location.create',async(req,res)=>{const id=randomUUID();db.prepare('INSERT INTO locations VALUES (?,?,?)').run(id,req.user.tenant,nameOf(req.body.name));res.json({id});})));
+ app.delete('/api/locations/:id',admin,wrap(managed('location.delete',async(req,res)=>{
+  if(db.prepare('SELECT 1 FROM devices WHERE tenant=? AND location=?').get(req.user.tenant,req.params.id))throw fail(409,'Hay pantallas en esta ubicación. Muévelas primero.');
+  if(!db.prepare('DELETE FROM locations WHERE id=? AND tenant=?').run(req.params.id,req.user.tenant).changes)throw fail(404,'Ubicación no encontrada.');
+  res.json({ok:true});
+ })));
  app.post('/api/devices/:id/location',admin,wrap(managed('device.location',async(req,res)=>{const location=req.body.location||null;if(location&&!db.prepare('SELECT 1 FROM locations WHERE id=? AND tenant=?').get(location,req.user.tenant))throw fail(404,'Ubicación no encontrada.');if(!db.prepare('UPDATE devices SET location=? WHERE id=? AND tenant=?').run(location,req.params.id,req.user.tenant).changes)throw fail(404,'Pantalla no encontrada.');res.json({ok:true});})));
  app.post('/api/devices/:id/playback',admin,wrap(managed('device.playback',async(req,res)=>{if(typeof req.body.paused!=='boolean')throw fail(400,'Estado inválido.');if(!db.prepare('UPDATE devices SET paused=? WHERE id=? AND tenant=?').run(req.body.paused?1:0,req.params.id,req.user.tenant).changes)throw fail(404,'Pantalla no encontrada.');res.json({ok:true});})));
  app.post('/api/devices/:id/sync',admin,wrap(managed('device.sync',async(req,res)=>{if(!db.prepare('UPDATE devices SET revision=revision+1 WHERE id=? AND tenant=?').run(req.params.id,req.user.tenant).changes)throw fail(404,'Pantalla no encontrada.');res.json({ok:true});})));

@@ -47,6 +47,9 @@ export function installStudio(app,{db,env,admin,wrap,readAsset,saveImage,streamA
  app.get('/api/studio/drafts/:id',admin,scope,editor,wrap(managed('studio.draft',async(req,res)=>res.json(draft(req.user.tenant,req.params.id)))));
  app.post('/api/studio/drafts',admin,scope,editor,wrap(managed('studio.create',async(req,res)=>{const data=clean(req.user.tenant,req.body),id=randomUUID();db.prepare('INSERT INTO studio_drafts VALUES (?,?,?,?,1,?)').run(id,req.user.tenant,data.name,JSON.stringify(data),Date.now());res.status(201).json(draft(req.user.tenant,id));})));
  app.put('/api/studio/drafts/:id',admin,scope,editor,wrap(managed('studio.update',async(req,res)=>{const data=clean(req.user.tenant,req.body.data);if(!db.prepare('UPDATE studio_drafts SET name=?,data=?,revision=revision+1 WHERE id=? AND tenant=? AND revision=?').run(data.name,JSON.stringify(data),req.params.id,req.user.tenant,req.body.revision).changes)throw fail(409,'El borrador cambió. Vuelve a abrirlo antes de guardar.');res.json(draft(req.user.tenant,req.params.id));})));
+ app.delete('/api/studio/drafts/:id',admin,scope,editor,wrap(managed('studio.deleteDraft',async(req,res)=>{
+  if(!db.prepare('DELETE FROM studio_drafts WHERE id=? AND tenant=?').run(req.params.id,req.user.tenant).changes)throw fail(404,'Borrador no encontrado.');res.json({ok:true});
+ })));
  app.get('/api/studio/jobs',admin,scope,editor,managed('studio.jobs',(req,res)=>res.json(db.prepare('SELECT * FROM studio_jobs WHERE tenant=? ORDER BY created DESC LIMIT 50').all(req.user.tenant).map(jobOut))));
  async function storeResult(job,name,bytes){
   try{const asset=await saveImage(job.tenant,'Fondo IA · '+name,bytes,true);db.prepare("UPDATE studio_jobs SET status='ready',asset=?,pending=NULL,error=NULL WHERE id=?").run(asset.id,job.id);}
