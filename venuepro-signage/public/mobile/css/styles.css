@@ -6,6 +6,13 @@
   --sans:system-ui,-apple-system,'Segoe UI',Roboto,sans-serif; --mono:ui-monospace,'SFMono-Regular','Roboto Mono',Menlo,Consolas,monospace;
   --radius-lg:22px; --radius-md:14px; --radius-sm:10px;
 }
+/* Tema claro — Ajustes ⚙️ lo activa con un booleano (toggleTheme en
+   app.js), agrega/quita la clase .light en <html> y la guarda en
+   localStorage (preferencia del dispositivo, no del tenant). */
+html.light{
+  --bg:#faf9f7; --ink:#14161a; --ink-dim:#585f68; --ink-dimmer:#7a828c; --ink-faint:#9aa2ab;
+  --card:#ffffff; --card-2:#f1f0ed; --line:rgba(20,22,26,.10); --line-soft:rgba(20,22,26,.07);
+}
 
 *{box-sizing:border-box}
 html,body{margin:0;height:100%}
@@ -21,7 +28,6 @@ body{
   min-height:100vh; display:flex; flex-direction:column; position:relative;
   background:var(--bg);
 }
-.screen.light{background:#faf9f7; color:#14161a}
 
 .topbar{
   display:flex; align-items:center; gap:10px; padding:16px 18px 6px;
@@ -46,8 +52,9 @@ body{
   background:rgba(14,15,18,.95); backdrop-filter:blur(6px); border-top:1px solid var(--line);
 }
 .tab{display:flex; flex-direction:column; align-items:center; gap:5px; cursor:pointer; background:none; border:none; color:inherit; font-family:var(--sans)}
-.tab .ico{width:20px; height:15px; border-radius:3px; border:1.5px solid var(--ink-faint)}
-.tab.active .ico{border-color:var(--accent)}
+.tab .ico{width:22px; height:22px; color:var(--ink-faint)}
+.tab .ico svg{width:100%; height:100%; display:block}
+.tab.active .ico{color:var(--accent)}
 .tab span{font:600 9.5px var(--sans); color:var(--ink-faint)}
 .tab.active span{color:var(--accent)}
 

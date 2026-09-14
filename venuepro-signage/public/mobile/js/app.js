@@ -25,7 +25,15 @@ const ui = {
                         // confirmación real de la cámara (no hay agente local)
   mixDeviceId: null,  // pantalla abierta en viewMix
   mixDraft: null,      // { layout, promo, logo, text, muted } — se guarda con saveMixNow()
+  theme: (() => { try { return localStorage.getItem('signage-theme') || 'dark'; } catch { return 'dark'; } })(),
 };
+applyTheme(ui.theme);
+
+// Preferencia solo del dispositivo (localStorage) — no es dato de negocio,
+// no hace falta guardarla en el servidor ni sincronizarla entre pantallas.
+function applyTheme(theme) {
+  document.documentElement.classList.toggle('light', theme === 'light');
+}
 
 let remote = null; // último resultado de getState(): { tenant, role, email, locations, devices, assets, playlists, schedules }
 
@@ -64,6 +72,11 @@ const actions = {
     catch (e) { ui.loginError = e.message || 'No se pudo entrar.'; render(); }
   },
   async logoutNow() { try { await logout(); } catch {} ui.authed = false; remote = null; render(); },
+  toggleTheme() {
+    ui.theme = ui.theme === 'dark' ? 'light' : 'dark';
+    try { localStorage.setItem('signage-theme', ui.theme); } catch {}
+    applyTheme(ui.theme); render();
+  },
 
   openDevice(id) { ui.detailDeviceId = id; render(); },
   closeDevice() { ui.detailDeviceId = null; render(); },
@@ -502,10 +515,16 @@ document.addEventListener('input', e => {
 
 // ---- piezas reutilizables ---------------------------------------------------
 
+// SVG trazados (currentColor) en vez de los cuadros vacíos que había antes.
+const TAB_ICONS = {
+  home: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="2.5" y="4" width="19" height="13" rx="2.2"/><path d="M8.5 20.5h7M12 17v3.5"/></svg>`,
+  content: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="2.7" y="2.7" width="8" height="8" rx="1.8"/><rect x="13.3" y="2.7" width="8" height="8" rx="1.8"/><rect x="2.7" y="13.3" width="8" height="8" rx="1.8"/><rect x="13.3" y="13.3" width="8" height="8" rx="1.8"/></svg>`,
+  schedule: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9.3"/><path d="M12 7v5.2l3.6 2.1"/></svg>`,
+};
 function tabbar() {
-  const tabs = [['home', 'Pantallas'], ['content', 'Contenido'], ['schedule', 'Horarios'], ['team', 'Equipo']];
-  return `<div class="tabbar">${tabs.map(([r, label]) => `
-    <button class="tab ${ui.route === r ? 'active' : ''}" ${A('goTab', r)}><div class="ico"></div><span>${label}</span></button>`).join('')}</div>`;
+  const tabs = [['home', 'Pantallas', TAB_ICONS.home], ['content', 'Contenido', TAB_ICONS.content], ['schedule', 'Horarios', TAB_ICONS.schedule]];
+  return `<div class="tabbar">${tabs.map(([r, label, icon]) => `
+    <button class="tab ${ui.route === r ? 'active' : ''}" ${A('goTab', r)}><div class="ico">${icon}</div><span>${label}</span></button>`).join('')}</div>`;
 }
 function toastHtml() {
   if (!ui.toast) return '';
@@ -514,9 +533,8 @@ function toastHtml() {
 function topbar(title) {
   return `<div class="topbar" style="justify-content:space-between">
     <div class="title">${esc(title)}</div>
-    <div style="display:flex;align-items:center;gap:10px">
-      <span style="font:400 10.5px var(--mono);color:var(--ink-dimmer)">${esc(remote.tenant)} · ${esc(remote.role)}</span>
-      <div class="row-tap" style="font:600 11px var(--sans);color:var(--ink-dim)" ${A('logoutNow')}>Salir</div>
+    <div style="display:flex;align-items:center;gap:14px">
+      <div class="row-tap" title="Ajustes" style="font-size:18px;line-height:1" ${A('goTab', 'settings')}>⚙️</div>
     </div>
   </div>`;
 }
@@ -1364,7 +1382,7 @@ async function loadUsers() { try { usersCache = await listUsers(); } catch { use
 function viewTeam() {
   if (usersCache === null) { loadUsers(); }
   return `<div class="screen">
-    ${topbar('Equipo')}
+    <div class="topbar"><div class="back" ${A('goTab', 'settings')}>‹</div><div class="title">Equipo</div></div>
     <div class="content">
       ${remote.role !== 'admin' ? `<div style="padding:24px 0;text-align:center;color:var(--ink-faint);font:400 12.5px var(--sans)">Solo un administrador puede gestionar el equipo.</div>` : `
       <div class="row" style="justify-content:flex-end;margin-bottom:14px"><div class="btn btn-primary row-tap" style="padding:10px 16px;font-size:12.5px" ${A('addUser')}>+ Nuevo acceso</div></div>
@@ -1375,7 +1393,27 @@ function viewTeam() {
         </div>`).join('') || `<div style="padding:16px 0;text-align:center;color:var(--ink-faint);font:400 12px var(--sans)">Cargando…</div>`}
       </div>`}
     </div>
-    ${tabbar()}
+    ${toastHtml()}
+  </div>`;
+}
+
+function viewSettings() {
+  return `<div class="screen">
+    <div class="topbar"><div class="back" ${A('goTab', 'home')}>‹</div><div class="title">Ajustes</div></div>
+    <div class="content">
+      <div class="row card-flat row-tap" style="padding:13px 14px;margin-bottom:10px" ${A('goTab', 'team')}>
+        <div style="flex:1;min-width:0"><div style="font:600 13px var(--sans)">Equipo</div><div style="font:400 10.5px var(--mono);color:var(--ink-dimmer)">Quién tiene acceso a este panel</div></div>
+        <div style="color:var(--ink-faint);font:400 13px var(--sans)">›</div>
+      </div>
+      <div class="row card-flat row-tap" style="padding:13px 14px" ${A('toggleTheme')}>
+        <div style="flex:1;min-width:0"><div style="font:600 13px var(--sans)">Tema oscuro</div><div style="font:400 10.5px var(--mono);color:var(--ink-dimmer)">${ui.theme === 'dark' ? 'Activado' : 'Desactivado (claro)'}</div></div>
+        <div style="width:44px;height:26px;border-radius:13px;background:${ui.theme === 'dark' ? 'var(--accent)' : 'var(--card-2)'};border:1px solid var(--line);position:relative;flex:none;transition:background .15s">
+          <div style="position:absolute;top:2px;left:${ui.theme === 'dark' ? '20px' : '2px'};width:20px;height:20px;border-radius:50%;background:#fff;transition:left .15s;box-shadow:0 1px 3px rgba(0,0,0,.3)"></div>
+        </div>
+      </div>
+      <div style="font:400 10px var(--mono);color:var(--ink-dimmer);margin-top:20px;text-align:center">${esc(remote.tenant)} · ${esc(remote.role)}</div>
+      <div class="row-tap" style="text-align:center;margin-top:14px;font:600 12px var(--sans);color:var(--red)" ${A('logoutNow')}>Cerrar sesión</div>
+    </div>
     ${toastHtml()}
   </div>`;
 }
@@ -1399,6 +1437,7 @@ function render() {
     case 'assetFolder': app.innerHTML = viewAssetFolder(); break;
     case 'schedule': app.innerHTML = viewSchedule(); break;
     case 'team': app.innerHTML = viewTeam(); break;
+    case 'settings': app.innerHTML = viewSettings(); break;
     case 'pair': app.innerHTML = viewPair(); break;
     case 'locations': app.innerHTML = viewLocations(); break;
     case 'locationDetail': app.innerHTML = viewLocationDetail(); break;
