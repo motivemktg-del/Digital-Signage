@@ -282,8 +282,19 @@ const actions = {
       if (d && d.liveChannel === sourceId) return; // ya está en esta fuente, nada que hacer
       await run(setLiveChannel(deviceId, sourceId), 'Fuente activada');
     } else {
-      if (d && !d.liveChannel && d.playlist === sourceId) return; // ya está mostrando esta lista
-      await run(Promise.all([assignPlaylist(deviceId, sourceId), d && d.liveChannel ? setLiveChannel(deviceId, null) : null].filter(Boolean)), 'Fuente activada');
+      // OJO: una TV puede tener una señal en vivo activa SIN tener
+      // liveChannel puesto — por ejemplo una cámara PTZ empujada a todas
+      // las TVs de la ubicación, o una URL suelta puesta por /live-source.
+      // Antes esto solo se limpiaba si d.liveChannel existía, así que en
+      // esos casos live_source se quedaba puesto para siempre: el
+      // reproductor Android nunca soltaba la señal en vivo (que además
+      // podía estar rota/desconectada) para intentar la lista, y se veía
+      // como "señal en vivo interrumpida, reintentando" sin fin — la lista
+      // nunca llegaba a probarse. Ahora se revisa liveSource también, no
+      // solo liveChannel.
+      const hasLive = d && (d.liveChannel || d.liveSource);
+      if (d && !hasLive && d.playlist === sourceId) return; // ya está mostrando esta lista
+      await run(Promise.all([assignPlaylist(deviceId, sourceId), hasLive ? setLiveChannel(deviceId, null) : null].filter(Boolean)), 'Fuente activada');
     }
   },
   // Mezclar desde la vista de fuente: sin una TV puntual seleccionada (acá
