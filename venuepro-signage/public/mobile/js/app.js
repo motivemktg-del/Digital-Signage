@@ -5,7 +5,7 @@
 // Se sube a mano en cada cambio de este archivo — se muestra en Ajustes
 // (viewSettings()) para poder confirmar de un vistazo si el celular ya
 // está corriendo el JS nuevo o todavía sirve una copia vieja de caché.
-const BUILD = '2026-09-15.8';
+const BUILD = '2026-09-15.9';
 
 // El QR de una TV sin emparejar ahora es una URL http(s) de verdad
 // (?pair=CODE, ver /api/pair/start en server.js) — para que la cámara
@@ -34,6 +34,11 @@ const ui = {
   // ubicación no tiene entrada acá todavía, se usa su primera fuente
   // disponible (canal antes que lista) como default.
   locationSource: {},
+  // { [deviceId]: templateId } — qué plantilla se está mirando en el
+  // selector "Plantilla de mezcla" de la ficha de cada TV (deviceSheet).
+  // Solo decide qué se VE elegido en el selector; el booleano de al lado
+  // es el que de verdad activa/quita esa plantilla en esa TV.
+  deviceTemplatePick: {},
   // Id de la TV marcada para Mezclar (borde amarillo) — tocar una TV que YA
   // es la fuente activa (borde verde) no la reasigna (sería un no-op) ni la
   // apaga (nunca), la marca/desmarca para esto en su lugar. Sirve para
@@ -115,7 +120,7 @@ function fmtTime(ms) { if (!ms) return 'nunca'; const s = Math.round((Date.now()
 function mixButtonHtml(action, arg, active, compact) {
   const pad = compact ? '7px 14px' : '9px 16px';
   if (!active) return `<div class="row-tap" style="flex:none;display:flex;align-items:center;gap:6px;padding:${pad};border-radius:6px;border:1px solid var(--line);font:600 12px var(--sans);color:var(--ink-dimmer);background:var(--card-2)" ${A(action, arg)}>🎛️ Mezclar</div>`;
-  return `<div class="row-tap" style="flex:none;display:flex;align-items:center;gap:6px;padding:${pad};border-radius:6px;border:1.5px solid transparent;font:600 12px var(--sans);color:#fff;background:linear-gradient(var(--card-2),var(--card-2)) padding-box,linear-gradient(90deg,#2f7bf6,#a855f7) border-box" ${A(action, arg)}>🎛️ Mezclar</div>`;
+  return `<div class="row-tap" style="flex:none;display:flex;align-items:center;gap:6px;padding:${pad};border-radius:6px;border:1.5px solid transparent;font:600 12px var(--sans);color:#fff;background:linear-gradient(var(--card-2),var(--card-2)) padding-box,linear-gradient(90deg,var(--accent),var(--purple)) border-box" ${A(action, arg)}>🎛️ Mezclar</div>`;
 }
 
 function showToast(msg, isError) {
@@ -544,6 +549,22 @@ const actions = {
     ui.mixTemplateDraft = { id: t.id, name: t.name }; render();
   },
   cancelMixTemplate() { ui.mixTemplateDraft = null; render(); },
+  // Atajo desde la ficha de la TV: elegir plantilla + el booleano de al
+  // lado, sin pasar por el Mezclador completo. "Ya activada" se decide
+  // comparando el mix actual de la TV contra la plantilla (el mix no
+  // recuerda de cuál salió, solo sus valores — ver deviceMixMatchesTemplate).
+  setDeviceTemplatePick(deviceId, select) { ui.deviceTemplatePick[deviceId] = select.value; render(); },
+  async toggleMixTemplateOnDevice(arg) {
+    const [deviceId, templateId] = arg.split(':');
+    const t = (remote.mixTemplates || []).find(x => x.id === templateId);
+    const d = remote.devices.find(x => x.id === deviceId);
+    if (!t || !d) return;
+    if (deviceMixMatchesTemplate(d, t)) {
+      await run(setMix(deviceId, { clear: true }), 'Plantilla quitada');
+    } else {
+      await run(setMix(deviceId, { layout: t.layout, promo: t.promo, logo: t.logo, text: t.text, muted: !!t.muted, style: t.style }), `Plantilla "${t.name}" activada`);
+    }
+  },
   async saveMixTemplateDraft(_, form) {
     const name = form.name.value.trim(); if (!name) return;
     const id = ui.mixTemplateDraft.id;
@@ -1139,8 +1160,14 @@ function deviceTile(d, selected) {
   const firstAsset = firstItem && !firstItem.channel ? remote.assets.find(a => a.id === firstItem.asset) : null;
   const active = selected && (selected.kind === 'channel' ? d.liveChannel === selected.id : (!d.liveChannel && d.playlist === selected.id));
   const mixSelected = active && ui.mixTvSelected === d.id;
+  // Morado: esta TV tiene una mezcla activa (una plantilla, o un mix hecho
+  // a mano) — es información aparte de "cuál fuente tiene" (verde) o "está
+  // marcada para elegir mezclar ahora" (amarillo, ver mixTvSelected), así
+  // que se nota aunque no sea la fuente que se esté mirando en este momento.
+  const mixActive = !!d.mix;
+  const borderColor = mixSelected ? 'var(--amber)' : mixActive ? 'var(--purple)' : active ? 'var(--green)' : null;
   const tapAttrs = selected ? A('assignDeviceToSource', `${d.id}:${selected.kind}:${selected.id}`) : A('openDevice', d.id);
-  return `<div class="card row-tap" style="overflow:hidden;position:relative;${mixSelected ? 'box-shadow:0 0 0 2px var(--amber)' : active ? 'box-shadow:0 0 0 2px var(--green)' : ''}" ${tapAttrs} data-longpress="openDevice" data-longpress-arg="${esc(d.id)}">
+  return `<div class="card row-tap" style="overflow:hidden;position:relative;${borderColor ? `box-shadow:0 0 0 2px ${borderColor}` : ''}" ${tapAttrs} data-longpress="openDevice" data-longpress-arg="${esc(d.id)}">
     ${d.alert ? `<div title="${esc(d.alert.text)}" style="position:absolute;top:4px;right:4px;z-index:1;font-size:11px;line-height:1;filter:drop-shadow(0 1px 2px rgba(0,0,0,.5))">🚨</div>` : ''}
     ${d.error ? `<div title="${esc(d.error)}" style="position:absolute;top:4px;left:4px;z-index:1;font-size:11px;line-height:1;filter:drop-shadow(0 1px 2px rgba(0,0,0,.5))">⚠️</div>` : ''}
     ${previewThumb(d, firstAsset, firstChannel)}
@@ -1237,6 +1264,16 @@ function newMixDraft(base) {
 function mixDraftPayload(d) {
   const { layout, promo, logo, text, muted, stripeColor, textColor, fontSize, thickness, fadeMs } = d;
   return { layout, promo, logo, text, muted, style: { stripeColor, textColor, fontSize, thickness, fadeMs } };
+}
+// ¿El mix ACTUAL de esta TV (d.mix, flat) es exactamente el de esta
+// plantilla (t.style, anidado)? El mix no guarda de qué plantilla salió,
+// solo sus valores — así que "¿ya está activada?" se decide comparando
+// campo por campo.
+function deviceMixMatchesTemplate(d, t) {
+  if (!d.mix || !t) return false;
+  const m = d.mix, s = t.style || {};
+  return m.layout === t.layout && m.promo === t.promo && m.logo === t.logo && m.text === t.text && !!m.muted === !!t.muted &&
+    m.stripeColor === s.stripeColor && m.textColor === s.textColor && m.fontSize === s.fontSize && m.thickness === s.thickness && m.fadeMs === s.fadeMs;
 }
 // Overlay visual de la mezcla (layout+logo+texto+estilo) — se dibuja EN EL
 // PANEL con CSS puro sobre la señal en vivo; el reproductor real compone
@@ -1453,12 +1490,35 @@ function deviceSheet() {
           <option value="" ${!d.liveChannel ? 'selected' : ''}>▶ Lista de reproducción${playlist ? ' — ' + esc(playlist.name) : ''}</option>
           ${chans.map(c => `<option value="${esc(c.id)}" ${d.liveChannel === c.id ? 'selected' : ''}>${esc(c.name)}</option>`).join('')}
         </select>
-        ${d.liveSource ? mixButtonHtml('openMix', d.id, d.mix, true) : ''}
         <div class="row-tap" style="padding:7px 14px;border-radius:6px;flex:none;background:${d.alert ? 'rgba(242,99,90,.14)' : 'var(--card-2)'};border:1px solid ${d.alert ? 'var(--red)' : 'var(--line)'};font:600 12px var(--sans)" ${A('sendAlertNow', d.id)}>🚨 Alerta</div>
       </div>
       ${chans.length === 0 ? `<div class="row card-flat row-tap" style="padding:11px 14px;opacity:.6;margin-bottom:16px" ${A('goTab', 'content')}>
         <div style="flex:1;min-width:0"><div style="font:600 12.5px var(--sans);margin-bottom:2px">Sin canales todavía</div><div style="font:400 10.5px var(--mono);color:var(--ink-dimmer)">configúralos en Contenido → Canales</div></div>
       </div>` : ''}`;
+    })()}
+    ${(() => {
+      // Plantilla de mezcla directa desde la ficha — sin pasar por el
+      // Mezclador completo. El selector solo lista plantillas (nunca
+      // listas de reproducción, esa asignación es global desde Fuente/
+      // ubicación) y el control de al lado es un booleano: activa o quita
+      // ESA plantilla en ESTA TV puntual. "¿Ya activada?" se decide
+      // comparando el mix actual contra los valores de la plantilla (el
+      // mix no recuerda de cuál salió) — ver deviceMixMatchesTemplate.
+      const templates = remote.mixTemplates || [];
+      if (!templates.length) return '';
+      const activeTemplate = templates.find(t => deviceMixMatchesTemplate(d, t));
+      const pickId = ui.deviceTemplatePick[d.id] || (activeTemplate ? activeTemplate.id : templates[0].id);
+      const picked = templates.find(t => t.id === pickId) || templates[0];
+      const on = deviceMixMatchesTemplate(d, picked);
+      return `<div class="eyebrow">Plantilla de mezcla</div>
+      <div class="row" style="gap:8px;margin-bottom:16px">
+        <select data-change="setDeviceTemplatePick" data-arg="${esc(d.id)}" style="flex:1;padding:11px;border-radius:6px;background:var(--card-2);border:1px solid var(--line);color:var(--ink)">
+          ${templates.map(t => `<option value="${esc(t.id)}" ${t.id === picked.id ? 'selected' : ''}>${esc(t.name)}</option>`).join('')}
+        </select>
+        <div class="row-tap" title="${on ? 'Quitar de esta TV' : 'Activar en esta TV'}" style="width:44px;height:26px;border-radius:6px;background:${on ? 'var(--purple)' : 'var(--card-2)'};border:1px solid var(--line);position:relative;flex:none;transition:background .15s" ${A('toggleMixTemplateOnDevice', `${d.id}:${picked.id}`)}>
+          <div style="position:absolute;top:2px;left:${on ? '20px' : '2px'};width:20px;height:20px;border-radius:50%;background:#fff;transition:left .15s;box-shadow:0 1px 3px rgba(0,0,0,.3)"></div>
+        </div>
+      </div>`;
     })()}
     ${d.alert ? `<div class="row" style="gap:8px;padding:9px 12px;border-radius:6px;background:rgba(242,99,90,.1);border:1px solid rgba(242,99,90,.3);margin-bottom:12px">
       <div style="flex:1;min-width:0"><div style="font:600 11.5px var(--sans);color:var(--red)">${esc(d.alert.text)}</div><div style="font:400 9.5px var(--mono);color:var(--ink-dimmer)">${{ info: 'informativa', warning: 'advertencia', critical: 'crítica' }[d.alert.level] || d.alert.level}</div></div>
