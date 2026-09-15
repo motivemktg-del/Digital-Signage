@@ -1478,7 +1478,14 @@ actions.toggleScanner = async function () {
   try {
     qrScanner = new Html5Qrcode('qr-reader');
     await qrScanner.start({ facingMode: 'environment' }, { fps: 10, qrbox: 220 }, text => {
-      const code = text.replace(/^venuepro-signage:/, '').trim();
+      // El QR ya no es "venuepro-signage:CODIGO" — desde que se cambió a una
+      // URL real (.../mobile/?pair=CODIGO, para que la cámara nativa de
+      // iOS/Safari lo reconozca) este lector interno se había quedado
+      // buscando solo el formato viejo, así que metía la URL completa en el
+      // campo en vez del código. Misma extracción que /api/pair/claim en
+      // server.js, para aceptar cualquiera de los dos formatos.
+      const fromUrl = text.match(/[?&]pair=([^&]+)/);
+      const code = (fromUrl ? decodeURIComponent(fromUrl[1]) : text).replace(/^venuepro-signage:/, '').replace(/\s/g, '').toUpperCase();
       const field = document.getElementById('qr-code-field'); if (field) field.value = code;
       stopScanner(); if (box) box.style.minHeight = '0'; if (btn) btn.textContent = 'Abrir cámara';
       showToast('Código leído');
