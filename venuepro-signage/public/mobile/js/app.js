@@ -2,9 +2,19 @@
 // de venuepro-signage (server.js). Sin framework: render() regenera el
 // HTML de #app; los clics se resuelven por delegación con data-action.
 
+// El QR de una TV sin emparejar ahora es una URL http(s) de verdad
+// (?pair=CODE, ver /api/pair/start en server.js) — para que la cámara
+// NATIVA del celular la reconozca y abra el panel sola, sin depender del
+// escáner de adentro de la página (en iOS Safari ese escáner a veces
+// simplemente no arranca la cámara, sin ningún error — problema conocido
+// de la librería ahí). Se lee UNA vez al cargar y se limpia de la URL
+// (más abajo, con history.replaceState) para que no se repita si el
+// usuario refresca o vuelve atrás.
+const pairCodeFromUrl = (() => { try { return new URLSearchParams(location.search).get('pair') || ''; } catch { return ''; } })();
 const ui = {
   authed: null,      // null = todavía no sabemos, true/false una vez consultado
-  route: 'home',      // home | content | schedule | team | pair
+  route: pairCodeFromUrl ? 'pair' : 'home',      // home | content | schedule | team | pair
+  pairCodeFromUrl,    // precarga el campo de código en viewPair() — ver arriba
   loginError: '',
   toast: null,
   detailDeviceId: null,
@@ -1430,7 +1440,7 @@ function viewPair() {
         <div style="flex:1;min-width:0"><div style="font:600 12.5px var(--sans);margin-bottom:2px">Crea una ubicación primero</div><div style="font:400 10.5px var(--mono);color:var(--ink-dimmer)">toda TV vive dentro de una ubicación</div></div>
       </div>` : `<form data-submit="confirmPair">
         <div class="stack">
-          <input id="qr-code-field" name="code" required placeholder="Código (ej. ABC123DEF456)" style="padding:12px 14px;border-radius:6px;background:var(--card-2);border:1px solid var(--line);color:var(--ink);text-transform:uppercase">
+          <input id="qr-code-field" name="code" required value="${esc(ui.pairCodeFromUrl || '')}" placeholder="Código (ej. ABC123DEF456)" style="padding:12px 14px;border-radius:6px;background:var(--card-2);border:1px solid var(--line);color:var(--ink);text-transform:uppercase">
           <input name="name" required placeholder="Nombre (ej. Barra 01)" style="padding:12px 14px;border-radius:6px;background:var(--card-2);border:1px solid var(--line);color:var(--ink)">
           <select name="location" required style="padding:12px 14px;border-radius:6px;background:var(--card-2);border:1px solid var(--line);color:var(--ink)">
             <option value="" disabled selected>Elegir ubicación…</option>
@@ -2073,5 +2083,7 @@ setInterval(() => {
   if (ui.locationDraft || ui.detailDeviceId || ui.ptzCameraDraft) return;
   refresh();
 }, 4000);
+
+if (pairCodeFromUrl) { try { history.replaceState(null, '', location.pathname); } catch { } }
 
 refresh();

@@ -454,11 +454,26 @@ export function createApp(env = process.env, studioOptions = {}) {
   db.prepare('DELETE FROM devices WHERE tenant IS NULL AND expires<?').run(Date.now());
   const id=randomUUID(),secret=token(),code=token().slice(0,12).toUpperCase();
   db.prepare('INSERT INTO devices (id,secret,code,expires) VALUES (?,?,?,?)').run(id,hash(secret),code,Date.now()+10*60000);
-  const qr=await QRCode.toDataURL('venuepro-signage:'+code,{width:480,margin:2});
+  // Antes el QR llevaba un esquema propio ("venuepro-signage:CODE") que
+  // solo el escáner de ESTA página sabe leer — en iOS Safari, el
+  // getUserMedia() que usa ese escáner adentro de la página a veces
+  // simplemente no arranca (problema conocido de html5-qrcode ahí, sin
+  // error visible). Con una URL http(s) de verdad, la cámara NATIVA del
+  // celular (que sí siempre reconoce QRs con un link) puede escanearla
+  // directo y abrir el panel con el código ya puesto — sin depender de
+  // que el escáner de la página funcione en cada navegador.
+  const qr=await QRCode.toDataURL(`${origin}/mobile/?pair=${code}`,{width:480,margin:2});
   res.json({id,secret,code,qr,expiresIn:600});
  }));
  app.post('/api/pair/claim',limit('pair-claim',20),admin,wrap(managed('pair.claim',async(req,res)=>{
-  const code=String(req.body.code||'').replace(/^venuepro-signage:/,'').replace(/\s/g,'').toUpperCase();
+  // Acepta el código solo, la URL completa del QR nuevo (?pair=CODE) o el
+  // esquema viejo (venuepro-signage:CODE, por si algún QR ya impreso/
+  // guardado de antes todavía anda circulando) — mismo campo de texto
+  // para los tres casos, sin pedirle al usuario que copie "solo la parte
+  // que sirve".
+  const raw=String(req.body.code||'').trim();
+  const fromUrl=raw.match(/[?&]pair=([^&]+)/);
+  const code=(fromUrl?decodeURIComponent(fromUrl[1]):raw).replace(/^venuepro-signage:/,'').replace(/\s/g,'').toUpperCase();
   const location=req.body.location||null;if(location&&!db.prepare('SELECT 1 FROM locations WHERE id=? AND tenant=?').get(location,req.user.tenant))throw fail(404,'Ubicación no encontrada.');
   const result=db.prepare('UPDATE devices SET tenant=?,name=?,location=?,code=NULL,expires=NULL WHERE code=? AND tenant IS NULL AND expires>?').run(req.user.tenant,nameOf(req.body.name),location,code,Date.now());
   if(!result.changes) throw fail(400,'Código vencido o ya utilizado.'); res.json({ok:true});
