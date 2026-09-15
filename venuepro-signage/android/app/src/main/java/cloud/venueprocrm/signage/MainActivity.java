@@ -501,35 +501,42 @@ public class MainActivity extends Activity {
    if("live".equals(item.optString("type",""))){playRotationLive(item);return;}
    File file=new File(assets,item.getString("sha"));playing=true;canvas=new FrameLayout(this);canvas.setClipChildren(true);root.addView(canvas);layoutDisplay();
    if(item.getString("type").startsWith("video/")){
+    // ExoPlayer en vez de android.media.MediaPlayer para el video LOCAL de
+    // la lista. MediaPlayer resultó frágil justo en la transición desde
+    // WebRTC/en vivo hacia la lista: prepareAsync() se quedaba colgado para
+    // siempre en varias TV boxes (decodificador de hardware recién soltado
+    // por la señal anterior) — el vigilante de abajo lo detectaba, pero
+    // reintentaba con el MISMO tipo de reproductor frágil una y otra vez,
+    // así que la pantalla quedaba cortando cada ~11s sin avanzar nunca de
+    // verdad (justo el síntoma reportado, no una casualidad). ExoPlayer ya
+    // se usa arriba para RTSP y maneja la reasignación del decodificador de
+    // forma mucho más robusta (reintenta con decodificador de software si
+    // el de hardware no responde a tiempo) — mismo patrón acá, solo que con
+    // un MediaItem de archivo local en vez de una URL RTSP.
     video=new TextureView(this);canvas.addView(video,new FrameLayout.LayoutParams(-1,-1,Gravity.CENTER));
-    video.setSurfaceTextureListener(new TextureView.SurfaceTextureListener(){
-     public void onSurfaceTextureAvailable(SurfaceTexture texture,int width,int height){
-      try{final MediaPlayer player=new MediaPlayer();mediaPlayer=player;Surface surface=new Surface(texture);player.setSurface(surface);surface.release();player.setDataSource(file.getAbsolutePath());
-       // "settled" evita que el vigilante de abajo actúe si prepareAsync()
-       // SÍ contestó a tiempo (con éxito o error) — y evita al revés que un
-       // onPrepared/onError tardío haga algo después de que el vigilante
-       // ya se dio por vencido y siguió con el próximo item.
-       final boolean[] settled={false};
-       player.setOnPreparedListener(mp->{if(mp!=mediaPlayer||settled[0])return;settled[0]=true;videoWidth=mp.getVideoWidth();videoHeight=mp.getVideoHeight();layoutDisplay();mp.start();});
-       player.setOnVideoSizeChangedListener((mp,w,h)->{videoWidth=w;videoHeight=h;layoutDisplay();});
-       player.setOnCompletionListener(mp->playNext());
-       player.setOnErrorListener((mp,what,extra)->{if(settled[0])return true;settled[0]=true;lastError="Video no compatible: "+what;ui.postDelayed(advance,1500);return true;});
-       player.prepareAsync();
-       // Vigilante: en algunos Android TV, prepareAsync() se queda colgado
-       // para siempre sin llamar ni a onPrepared ni a onError (típicamente
-       // porque el decodificador de hardware seguía ocupado por la señal
-       // en vivo anterior, apenas soltada) — sin este chequeo, la pantalla
-       // se queda negra de forma PERMANENTE, sin ningún error que avisar.
-       ui.postDelayed(()->{
-        if(settled[0]||player!=mediaPlayer)return;settled[0]=true;
-        lastError="El video no respondió a tiempo, reintentando…";ui.postDelayed(advance,1500);
-       },10000);
-      }catch(Exception error){lastError="No se pudo abrir el video";ui.postDelayed(advance,1500);}
+    final androidx.media3.exoplayer.ExoPlayer player=new androidx.media3.exoplayer.ExoPlayer.Builder(this).build();
+    exoPlayer=player;player.setVideoTextureView(video);
+    player.setMediaItem(androidx.media3.common.MediaItem.fromUri(android.net.Uri.fromFile(file)));
+    // "settled" evita que el vigilante de abajo actúe si ExoPlayer SÍ
+    // contestó a tiempo (listo o error).
+    final boolean[] settled={false};
+    player.addListener(new androidx.media3.common.Player.Listener(){
+     @Override public void onVideoSizeChanged(androidx.media3.common.VideoSize size){videoWidth=size.width;videoHeight=size.height;layoutDisplay();}
+     @Override public void onPlaybackStateChanged(int state){
+      if(player!=exoPlayer)return;
+      if(state==androidx.media3.common.Player.STATE_READY)settled[0]=true;
+      if(state==androidx.media3.common.Player.STATE_ENDED)playNext();
      }
-     public void onSurfaceTextureSizeChanged(SurfaceTexture texture,int width,int height){}
-     public boolean onSurfaceTextureDestroyed(SurfaceTexture texture){return true;}
-     public void onSurfaceTextureUpdated(SurfaceTexture texture){}
+     @Override public void onPlayerError(androidx.media3.common.PlaybackException error){if(player!=exoPlayer)return;settled[0]=true;lastError="Video no compatible: "+error.getMessage();ui.postDelayed(advance,1500);}
     });
+    player.setPlayWhenReady(true);player.prepare();
+    // Vigilante: mismo caso límite de siempre (más raro con ExoPlayer, pero
+    // no imposible) — si ni READY ni error llegan en 10s, se fuerza el
+    // reintento en vez de quedar colgado sin ningún aviso.
+    ui.postDelayed(()->{
+     if(settled[0]||player!=exoPlayer)return;settled[0]=true;
+     lastError="El video no respondió a tiempo, reintentando…";ui.postDelayed(advance,1500);
+    },10000);
    }else{
     BitmapFactory.Options opts=new BitmapFactory.Options();opts.inJustDecodeBounds=true;BitmapFactory.decodeFile(file.getAbsolutePath(),opts);int max=Math.max(getResources().getDisplayMetrics().widthPixels,getResources().getDisplayMetrics().heightPixels);opts.inSampleSize=1;while(Math.max(opts.outWidth,opts.outHeight)/opts.inSampleSize>max*2)opts.inSampleSize*=2;opts.inJustDecodeBounds=false;
     Bitmap bitmap=BitmapFactory.decodeFile(file.getAbsolutePath(),opts);if(bitmap==null)throw new IOException("Imagen no compatible");photo=new ImageView(this);photo.setScaleType(ImageView.ScaleType.CENTER_CROP);photo.setImageBitmap(bitmap);canvas.addView(photo,new FrameLayout.LayoutParams(-1,-1));layoutDisplay();ui.postDelayed(advance,item.getInt("seconds")*1000L);

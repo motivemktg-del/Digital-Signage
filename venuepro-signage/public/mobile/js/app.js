@@ -89,9 +89,18 @@ function showToast(msg, isError) {
   showToast._t = setTimeout(() => { ui.toast = null; render(); }, 2600);
 }
 
+// Firma de lo que trae getState() SIN el latido ("seen") de cada TV — ese
+// campo cambia solo por seguir viva (cada ~1s por el heartbeat de
+// MainActivity.java), no porque haya algo nuevo que mostrar. La usa el
+// auto-refresh silencioso de abajo para saber si de verdad vale la pena
+// volver a dibujar, o si sería puro ruido.
+let lastStateSignature = null;
+function stateSignature(r) {
+  try { return JSON.stringify(r, (k, v) => k === 'seen' ? undefined : v); } catch { return null; }
+}
 async function refresh() {
-  try { remote = await getState(); ui.authed = true; }
-  catch (e) { ui.authed = false; remote = null; }
+  try { remote = await getState(); ui.authed = true; lastStateSignature = stateSignature(remote); }
+  catch (e) { ui.authed = false; remote = null; lastStateSignature = null; }
   render();
 }
 
@@ -2078,11 +2087,26 @@ function wireLiveFeedFallbacks() {
 // las TVs realmente importa) se refresca solo cada 4s — nunca mientras
 // haya un editor/ficha abierto encima, para no pisar algo que se esté
 // escribiendo a mitad de camino.
-setInterval(() => {
+//
+// OJO: esto llama a getState() directo, NO a refresh() — refresh() SIEMPRE
+// llama a render(), que regenera el HTML entero con innerHTML= y por lo
+// tanto recrea de cero cualquier <video>/<img> de vista previa que esté
+// mostrando una fuente en vivo. Recrearlo cada 4s se ve como un parpadeo o
+// corte de la reproducción aunque el contenido mostrado sea EXACTAMENTE el
+// mismo (bug real: apareció justo al agregar este auto-refresh). Por eso
+// acá se compara la firma del estado nuevo contra la del último dibujado
+// (stateSignature(), sin el "seen" que cambia solo) y SOLO se llama a
+// render() cuando de verdad cambió algo visible.
+setInterval(async () => {
   if (ui.authed !== true) return;
   if (ui.route !== 'home' && ui.route !== 'locationDetail') return;
   if (ui.locationDraft || ui.detailDeviceId || ui.ptzCameraDraft) return;
-  refresh();
+  try {
+    const r = await getState();
+    const sig = stateSignature(r);
+    if (sig === lastStateSignature) return; // nada visible cambió, no redibujar
+    remote = r; lastStateSignature = sig; render();
+  } catch { /* silencioso — el próximo intento (4s después) ya reintenta */ }
 }, 4000);
 
 if (pairCodeFromUrl) { try { history.replaceState(null, '', location.pathname); } catch { } }

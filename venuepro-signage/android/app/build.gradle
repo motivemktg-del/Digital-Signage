@@ -7,7 +7,7 @@ android {
  // "hay algo nuevo que instalar" al reinstalar sobre una versión previa
  // con la misma firma; versionName es la que se ve en pantalla (ver
  // MainActivity.message()/showPair()).
- defaultConfig { applicationId 'cloud.venueprocrm.signage'; minSdk 26; targetSdk 35; versionCode 4; versionName '0.4.0' }
+ defaultConfig { applicationId 'cloud.venueprocrm.signage'; minSdk 26; targetSdk 35; versionCode 5; versionName '0.4.1' }
  compileOptions { sourceCompatibility JavaVersion.VERSION_17; targetCompatibility JavaVersion.VERSION_17 }
  // Desde Android Gradle Plugin 8, BuildConfig.java (con VERSION_NAME,
  // que usa MainActivity para mostrar la versión en pantalla) ya NO se
