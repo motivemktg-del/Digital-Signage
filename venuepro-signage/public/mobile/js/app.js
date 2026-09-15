@@ -10,7 +10,12 @@ const ui = {
   detailDeviceId: null,
   deviceMoreOpen: false, // "Ubicación" + "Pantalla" en la ficha van juntas en un solo colapsable, arranca cerrado
   currentLocationId: null, // ubicación abierta en viewLocationDetail (null = "Sin ubicación", un grupo real, no "ninguna")
-  locationSourceChannel: null, // canal elegido en el selector de Fuente de viewLocationDetail — solo decide qué se previsualiza/resalta, no prende nada solo
+  // { [ubicaciónId]: canalId } — qué fuente se está viendo/configurando en
+  // el selector de cada ubicación (viewLocationDetail). Se acuerda de la
+  // última elegida por ubicación (no se resetea al salir y volver a
+  // entrar) — nunca queda "en blanco": si una ubicación no tiene entrada
+  // acá todavía, se usa su primer canal disponible como default.
+  locationSourceChannel: {},
   currentFolderId: null,   // carpeta de biblioteca abierta en viewAssetFolder
   previewAssetId: null,    // asset mostrado a pantalla completa (lightbox)
   playlistDraft: null, // { id, name, items:[{asset,seconds}|{channel,seconds}] } al crear/editar lista
@@ -226,28 +231,30 @@ const actions = {
     if (!confirm('¿Eliminar este encuadre guardado?')) return;
     await run(deletePtzPreset(ui.ptzCameraId, presetId), 'Encuadre eliminado');
   },
-  openLocation(id) { ui.currentLocationId = id; ui.locationSourceChannel = null; ui.route = 'locationDetail'; render(); },
+  openLocation(id) { ui.currentLocationId = id; ui.route = 'locationDetail'; render(); },
   // "Sin ubicación" no es una fila real de la tabla locations — no tiene
   // id para pasarle a openLocation() (A() convertiría null en '' y
   // rompería el filtro d.location===loc.id, que sí necesita null real).
-  openUnassignedLocation() { ui.currentLocationId = null; ui.locationSourceChannel = null; ui.route = 'locationDetail'; render(); },
+  openUnassignedLocation() { ui.currentLocationId = null; ui.route = 'locationDetail'; render(); },
   // Cambiar de fuente en esta vista NO toca ningún TV todavía — solo
   // decide qué fuente se está mirando/configurando (el preview grande y
   // qué TVs se resaltan en la grilla). Tocar una TV abajo sí actúa de una.
-  // data-change llama fn(el.dataset.arg, el) siempre — este <select> no
-  // tiene data-arg, así que el primer parámetro llega vacío a propósito;
-  // el elemento real (para leer .value) es el SEGUNDO, igual que
-  // setDeviceSource(id, select) más abajo.
-  setLocationSourcePreview(_, select) { ui.locationSourceChannel = select.value || null; render(); },
-  // Tocar una TV en la grilla de una fuente: si ya tiene ESA fuente
-  // prendida, la apaga (vuelve a su lista); si no, la prende — mismo
-  // comando que el <select> de Fuente en la ficha de la TV, solo que
-  // desde el otro sentido (fuente → elegir TVs, en vez de TV → elegir fuente).
-  async toggleDeviceChannel(arg) {
+  // Se guarda por ubicación (data-arg = su locationKey) para que la
+  // próxima vez que se entre a ESA ubicación se quede en la misma fuente
+  // — nunca vuelve a quedar "en blanco".
+  setLocationSourcePreview(locationKey, select) { ui.locationSourceChannel[locationKey] = select.value; render(); },
+  // Tocar una TV en la grilla de una fuente: la ASIGNA a esta fuente — NO
+  // es un interruptor de encendido/apagado. Una TV nunca se apaga sola
+  // desde acá tocándola de nuevo; solo deja de tener ESTA fuente cuando
+  // OTRA fuente la toma (se toca su ícono estando esa otra elegida
+  // arriba). Volver a "Lista de reproducción" sigue existiendo, pero es
+  // una decisión aparte, explícita, desde la ficha de la TV (mantener
+  // presionado → Fuente → Lista de reproducción) — no un toque suelto acá.
+  async assignDeviceToChannel(arg) {
     const [deviceId, channelId] = arg.split(':');
     const d = remote.devices.find(x => x.id === deviceId);
-    const on = d && d.liveChannel === channelId;
-    await run(setLiveChannel(deviceId, on ? null : channelId), on ? 'Volviendo a la lista' : 'Fuente activada');
+    if (d && d.liveChannel === channelId) return; // ya está en esta fuente, nada que hacer
+    await run(setLiveChannel(deviceId, channelId), 'Fuente activada');
   },
   // Mezclar desde la vista de fuente: sin una TV puntual seleccionada (acá
   // se trabaja por fuente, no por TV), se abre el editor sobre la PRIMERA
@@ -724,7 +731,7 @@ function tabbar() {
 }
 function toastHtml() {
   if (!ui.toast) return '';
-  return `<div style="position:fixed;left:50%;bottom:96px;transform:translateX(-50%);background:${ui.toast.isError ? '#3a1f1d' : '#1b1d22'};border:1px solid ${ui.toast.isError ? 'rgba(242,99,90,.4)' : 'var(--line)'};color:#fff;padding:10px 16px;border-radius:12px;font:600 12.5px var(--sans);z-index:30;max-width:88%;box-shadow:0 6px 20px rgba(0,0,0,.35)">${esc(ui.toast.msg)}</div>`;
+  return `<div style="position:fixed;left:50%;bottom:96px;transform:translateX(-50%);background:${ui.toast.isError ? '#3a1f1d' : '#1b1d22'};border:1px solid ${ui.toast.isError ? 'rgba(242,99,90,.4)' : 'var(--line)'};color:#fff;padding:10px 16px;border-radius:6px;font:600 12.5px var(--sans);z-index:30;max-width:88%;box-shadow:0 6px 20px rgba(0,0,0,.35)">${esc(ui.toast.msg)}</div>`;
 }
 function topbar(title) {
   // El 🚨 solo va en la pestaña Home (hoy: Ubicaciones) — es un disparador
@@ -749,8 +756,8 @@ function viewLogin() {
       <div style="font:400 12.5px var(--sans);color:var(--ink-dim);margin-bottom:24px">Accede al panel de tu organización.</div>
       <form data-submit="submitLogin">
         <div class="stack">
-          <input name="email" type="email" required placeholder="Correo" autocomplete="username" style="padding:13px 14px;border-radius:12px;background:var(--card-2);border:1px solid var(--line);color:var(--ink);font:500 14px var(--sans)">
-          <input name="password" type="password" required placeholder="Contraseña" autocomplete="current-password" style="padding:13px 14px;border-radius:12px;background:var(--card-2);border:1px solid var(--line);color:var(--ink);font:500 14px var(--sans)">
+          <input name="email" type="email" required placeholder="Correo" autocomplete="username" style="padding:13px 14px;border-radius:6px;background:var(--card-2);border:1px solid var(--line);color:var(--ink);font:500 14px var(--sans)">
+          <input name="password" type="password" required placeholder="Contraseña" autocomplete="current-password" style="padding:13px 14px;border-radius:6px;background:var(--card-2);border:1px solid var(--line);color:var(--ink);font:500 14px var(--sans)">
           ${ui.loginError ? `<div style="font:400 11.5px var(--sans);color:var(--red)">${esc(ui.loginError)}</div>` : ''}
           <button type="submit" class="btn btn-primary" style="margin-top:6px;border:none">Entrar</button>
         </div>
@@ -775,7 +782,7 @@ function viewHome() {
     ${topbar('Ubicaciones')}
     <div class="content">
       <div class="row" style="gap:8px;margin-bottom:16px">
-        <div class="row-tap" style="flex:1;text-align:center;padding:11px 0;border-radius:12px;background:var(--card-2);border:1px solid var(--line);font:600 12.5px var(--sans);color:var(--ink-dim)" ${A('startPairing')}>+ Emparejar TV</div>
+        <div class="row-tap" style="flex:1;text-align:center;padding:11px 0;border-radius:6px;background:var(--card-2);border:1px solid var(--line);font:600 12.5px var(--sans);color:var(--ink-dim)" ${A('startPairing')}>+ Emparejar TV</div>
       </div>
       ${remote.locations.length === 0 && unassigned === 0 ? emptyState('Sin ubicaciones todavía', 'Agrega la primera para empezar a organizar tus TVs.') : `<div class="stack" style="margin-bottom:16px">
         ${remote.locations.map(l => `<div class="card row row-tap" style="padding:13px 14px" ${A('openLocation', l.id)}>
@@ -783,7 +790,7 @@ function viewHome() {
             <div style="font:600 13px var(--sans)">${esc(l.name)}</div>
             <div style="font:400 10.5px var(--mono);color:var(--ink-dimmer)">${counts.get(l.id) || 0} TV${counts.get(l.id) === 1 ? '' : 's'}</div>
           </div>
-          <div class="row-tap" title="Editar ubicación" style="width:28px;height:28px;border-radius:8px;flex:none;display:flex;align-items:center;justify-content:center;background:var(--card-2);margin-right:6px" ${A('editLocationNow', l.id)}>✏️</div>
+          <div class="row-tap" title="Editar ubicación" style="width:28px;height:28px;border-radius:6px;flex:none;display:flex;align-items:center;justify-content:center;background:var(--card-2);margin-right:6px" ${A('editLocationNow', l.id)}>✏️</div>
           <div style="color:var(--ink-faint);font:400 13px var(--sans)">›</div>
         </div>`).join('')}
         ${unassigned ? `<div class="card row row-tap" style="padding:13px 14px;opacity:.75" ${A('openUnassignedLocation')}>
@@ -809,11 +816,11 @@ function locationEditor(d) {
     <div class="sheet-grip"></div>
     <div class="row" style="gap:8px;margin-bottom:14px">
       <div style="font:700 18px var(--sans);flex:1;min-width:0">${d.id ? 'Editar ubicación' : 'Nueva ubicación'}</div>
-      <div class="row-tap" title="Cerrar" style="width:30px;height:30px;border-radius:9px;flex:none;display:flex;align-items:center;justify-content:center;background:var(--card-2);font:600 14px var(--sans)" ${A('cancelLocation')}>✕</div>
+      <div class="row-tap" title="Cerrar" style="width:30px;height:30px;border-radius:6px;flex:none;display:flex;align-items:center;justify-content:center;background:var(--card-2);font:600 14px var(--sans)" ${A('cancelLocation')}>✕</div>
     </div>
     <form data-submit="saveLocationDraft">
       <div class="stack">
-        <input name="name" required value="${esc(d.name)}" placeholder="Nombre (ej. Sucursal Centro)" style="padding:11px 13px;border-radius:10px;background:var(--card-2);border:1px solid var(--line);color:var(--ink)">
+        <input name="name" required value="${esc(d.name)}" placeholder="Nombre (ej. Sucursal Centro)" style="padding:11px 13px;border-radius:6px;background:var(--card-2);border:1px solid var(--line);color:var(--ink)">
         <button type="submit" class="btn btn-primary" style="border:none">Guardar</button>
       </div>
     </form>
@@ -829,35 +836,28 @@ function viewLocationDetail() {
   const loc = ui.currentLocationId === null ? { id: null, name: 'Sin ubicación' } : remote.locations.find(l => l.id === ui.currentLocationId);
   if (loc === undefined) { ui.route = 'home'; return viewHome(); }
   const devices = remote.devices.filter(d => d.location === loc.id);
-  const cams = (remote.ptzCameras || []).filter(c => c.location === loc.id);
   // Un canal sin ubicación asignada (!c.location) está disponible para
   // CUALQUIER TV, no solo las de una ubicación puntual — mismo filtro que
   // ya usa el selector de Fuente de la ficha individual (ver deviceSheet).
   // Sin este "!c.location ||", los canales de uso general (el caso normal
   // hoy) no aparecían en este selector — bug reportado.
   const chans = (remote.channels || []).filter(c => !c.location || c.location === loc.id);
-  const selChan = ui.locationSourceChannel ? chans.find(c => c.id === ui.locationSourceChannel) : null;
+  // "Sin ubicación" no tiene id real — se guarda bajo una llave de texto
+  // fija en vez de "null" (las claves de un objeto JS siempre son string,
+  // "null" se prestaría a confusión leyendo el código).
+  const locationKey = loc.id === null ? 'unassigned' : loc.id;
+  // NUNCA en blanco: si todavía no se eligió nada para esta ubicación (o
+  // lo que se había elegido ya no existe/no aplica acá), cae al primer
+  // canal disponible — el selector solo queda vacío si de plano no hay
+  // ningún canal (chans.length===0), caso aparte más abajo.
+  const selChan = chans.find(c => c.id === ui.locationSourceChannel[locationKey]) || chans[0] || null;
   const activeCount = selChan ? devices.filter(d => d.liveChannel === selChan.id).length : 0;
   return `<div class="screen">
     <div class="topbar"><div class="back" ${A('goTab', 'home')}>‹</div><div class="title">${esc(loc.name)}</div></div>
     <div class="content">
-      ${locationSourceBlock(chans, selChan, activeCount)}
+      ${locationSourceBlock(locationKey, chans, selChan, activeCount)}
       <div class="eyebrow">TVs${devices.length ? ' · ' + devices.length : ''}</div>
       ${devices.length === 0 ? emptyState('Sin TVs aquí todavía', 'Empareja una TV y elige esta ubicación, o mueve una existente desde su detalle.') : `<div class="grid-4" style="margin-bottom:20px">${devices.map(d => deviceTile(d, selChan ? selChan.id : null)).join('')}</div>`}
-
-      ${loc.id !== null ? `<div class="row" style="justify-content:space-between;align-items:baseline;margin-bottom:11px">
-        <div class="eyebrow" style="margin:0">Cámaras PTZ</div>
-        <div class="row-tap" style="font:600 11px var(--sans);color:var(--accent)" ${A('addPtzCamera', loc.id)}>+ Agregar</div>
-      </div>
-      <div class="stack">
-        ${cams.length === 0 ? `<div style="padding:14px 0;text-align:center;color:var(--ink-faint);font:400 11.5px var(--sans)">Sin cámaras PTZ en esta ubicación.</div>` : cams.map(c => `<div class="card row" style="padding:12px 14px">
-          <div class="row-tap" style="flex:1;min-width:0" ${A('openPtz', c.id)}>
-            <div style="font:600 12.5px var(--sans)">${esc(c.name)}</div>
-            <div style="font:400 10px var(--mono);color:var(--ink-dimmer);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${c.onvif_url ? 'ONVIF configurado' : 'sin URL ONVIF'} · ${c.presets.length} encuadre${c.presets.length === 1 ? '' : 's'}</div>
-          </div>
-          <div class="row-tap" title="Editar cámara" style="margin-left:8px" ${A('editPtzCameraNow', c.id)}>✏️</div>
-        </div>`).join('')}
-      </div>` : ''}
     </div>
     ${ui.detailDeviceId ? deviceSheet() : ''}
     ${ui.ptzCameraDraft ? ptzCameraEditor(ui.ptzCameraDraft) : ''}
@@ -865,30 +865,31 @@ function viewLocationDetail() {
   </div>`;
 }
 
-// Selector de fuente de la ubicación (arriba de la grilla de TVs): elegir
-// un canal solo cambia el preview grande y qué TVs se resaltan abajo —
-// para de verdad prenderlo hay que tocar la TV en la grilla. "Mezclar"
-// actúa sobre la mezcla de la(s) TV(s) que ya tienen esta fuente activa
-// (ver openMixForChannel) — deshabilitado visualmente si ninguna la tiene.
-function locationSourceBlock(chans, selChan, activeCount) {
-  const box = 'width:100%;aspect-ratio:16/9;border-radius:14px;overflow:hidden;background:repeating-linear-gradient(135deg,#242830 0 7px,#1c1f25 7px 14px);display:flex;align-items:center;justify-content:center;margin-bottom:14px;position:relative';
+// Selector de fuente de la ubicación (arriba de la grilla de TVs). NUNCA
+// queda en blanco — siempre hay un canal elegido mientras exista al menos
+// uno (ver selChan en viewLocationDetail). Elegir un canal acá solo
+// cambia el preview grande y qué TVs se resaltan abajo; para de verdad
+// asignárselo a una TV hay que tocarla en la grilla. "Mezclar" actúa
+// sobre la(s) TV(s) que ya tienen esta fuente activa (ver
+// openMixForChannel) — deshabilitado visualmente si ninguna la tiene.
+function locationSourceBlock(locationKey, chans, selChan, activeCount) {
+  const box = 'width:100%;aspect-ratio:16/9;border-radius:6px;overflow:hidden;background:repeating-linear-gradient(135deg,#242830 0 7px,#1c1f25 7px 14px);display:flex;align-items:center;justify-content:center;margin-bottom:14px;position:relative';
   return `<div class="eyebrow">Fuente</div>
   <div style="${box}">
     ${selChan
       ? `<video autoplay muted playsinline data-webrtc-offer="/api/channels/${esc(selChan.id)}/webrtc-offer" data-mp4-src="${channelLiveFeedUrl(selChan.id)}" data-snapshot-src="${channelLiveFeedUrl(selChan.id, 'snapshot')}" style="position:absolute;inset:0;width:100%;height:100%;object-fit:cover"></video>
          <div class="badge-live" style="position:absolute;top:10px;left:10px"><div class="dot dot-sm" style="background:var(--red)"></div><span>EN DIRECTO</span></div>`
-      : `<span style="font:500 10px var(--mono);color:var(--ink-faint)">elige una fuente</span>`}
-  </div>
-  <div class="row" style="gap:8px;margin-bottom:${selChan ? '6px' : '16px'}">
-    <select data-change="setLocationSourcePreview" style="flex:1;min-width:0;padding:11px;border-radius:10px;background:var(--card-2);border:1.5px solid ${selChan ? 'var(--accent)' : 'var(--line)'};color:var(--ink)">
-      <option value="" ${!selChan ? 'selected' : ''}>Elegir fuente…</option>
-      ${chans.map(c => `<option value="${esc(c.id)}" ${selChan && selChan.id === c.id ? 'selected' : ''}>🔴 ${esc(c.name)}</option>`).join('')}
-    </select>
-    <div class="row-tap" style="flex:none;padding:11px 16px;border-radius:10px;background:${activeCount ? 'rgba(47,123,246,.12)' : 'var(--card-2)'};border:1px solid ${activeCount ? 'var(--accent)' : 'var(--line)'};font:600 12px var(--sans)" ${selChan ? A('openMixForChannel', selChan.id) : ''}>🎛️ Mezclar</div>
+      : `<span style="font:500 10px var(--mono);color:var(--ink-faint)">sin canales todavía</span>`}
   </div>
   ${chans.length === 0 ? `<div class="row card-flat row-tap" style="padding:11px 14px;opacity:.6;margin-bottom:16px" ${A('goTab', 'content')}>
     <div style="flex:1;min-width:0"><div style="font:600 12.5px var(--sans);margin-bottom:2px">Sin canales todavía</div><div style="font:400 10.5px var(--mono);color:var(--ink-dimmer)">configúralos en Contenido → Canales</div></div>
-  </div>` : selChan ? `<div style="font:400 10.5px var(--mono);color:var(--ink-dimmer);margin:0 0 16px">Toca una TV abajo para prenderla o apagarla ahí · ${activeCount} activa${activeCount === 1 ? '' : 's'}</div>` : `<div style="margin-bottom:16px"></div>`}`;
+  </div>` : `<div class="row" style="gap:8px;margin-bottom:6px">
+    <select data-change="setLocationSourcePreview" data-arg="${esc(locationKey)}" style="flex:1;min-width:0;padding:11px;border-radius:6px;background:var(--card-2);border:1.5px solid var(--accent);color:var(--ink)">
+      ${chans.map(c => `<option value="${esc(c.id)}" ${selChan.id === c.id ? 'selected' : ''}>🔴 ${esc(c.name)}</option>`).join('')}
+    </select>
+    <div class="row-tap" style="flex:none;padding:11px 16px;border-radius:6px;background:${activeCount ? 'rgba(47,123,246,.12)' : 'var(--card-2)'};border:1px solid ${activeCount ? 'var(--accent)' : 'var(--line)'};font:600 12px var(--sans)" ${A('openMixForChannel', selChan.id)}>🎛️ Mezclar</div>
+  </div>
+  <div style="font:400 10.5px var(--mono);color:var(--ink-dimmer);margin:0 0 16px">Toca una TV abajo para asignarle esta fuente · ${activeCount} activa${activeCount === 1 ? '' : 's'}</div>`}`;
 }
 
 function ptzCameraEditor(d) {
@@ -897,14 +898,14 @@ function ptzCameraEditor(d) {
     <div class="sheet-grip"></div>
     <div class="row" style="gap:8px;margin-bottom:14px">
       <div style="font:700 18px var(--sans);flex:1;min-width:0">${d.id ? 'Editar cámara' : 'Nueva cámara PTZ'}</div>
-      <div class="row-tap" title="Cerrar" style="width:30px;height:30px;border-radius:9px;flex:none;display:flex;align-items:center;justify-content:center;background:var(--card-2);font:600 14px var(--sans)" ${A('cancelPtzCamera')}>✕</div>
+      <div class="row-tap" title="Cerrar" style="width:30px;height:30px;border-radius:6px;flex:none;display:flex;align-items:center;justify-content:center;background:var(--card-2);font:600 14px var(--sans)" ${A('cancelPtzCamera')}>✕</div>
     </div>
     <form data-submit="savePtzCameraDraft">
       <div class="stack">
-        <input name="name" required value="${esc(d.name)}" placeholder="Nombre (ej. PTZ Escenario)" style="padding:11px 13px;border-radius:10px;background:var(--card-2);border:1px solid var(--line);color:var(--ink)">
-        <input name="onvifUrl" value="${esc(d.onvifUrl)}" placeholder="URL ONVIF — ej. onvif://usuario:pass@192.168.1.41" style="padding:11px 13px;border-radius:10px;background:var(--card-2);border:1px solid var(--line);color:var(--ink)">
-        <input name="rtspUrl" value="${esc(d.rtspUrl)}" placeholder="URL RTSP del video (opcional)" style="padding:11px 13px;border-radius:10px;background:var(--card-2);border:1px solid var(--line);color:var(--ink)">
-        <input name="viewUrl" value="${esc(d.viewUrl)}" placeholder="URL de VIDEO de go2rtc — ej. http://host:1984/api/stream.mp4?src=ptz1" style="padding:11px 13px;border-radius:10px;background:var(--card-2);border:1px solid var(--line);color:var(--ink)">
+        <input name="name" required value="${esc(d.name)}" placeholder="Nombre (ej. PTZ Escenario)" style="padding:11px 13px;border-radius:6px;background:var(--card-2);border:1px solid var(--line);color:var(--ink)">
+        <input name="onvifUrl" value="${esc(d.onvifUrl)}" placeholder="URL ONVIF — ej. onvif://usuario:pass@192.168.1.41" style="padding:11px 13px;border-radius:6px;background:var(--card-2);border:1px solid var(--line);color:var(--ink)">
+        <input name="rtspUrl" value="${esc(d.rtspUrl)}" placeholder="URL RTSP del video (opcional)" style="padding:11px 13px;border-radius:6px;background:var(--card-2);border:1px solid var(--line);color:var(--ink)">
+        <input name="viewUrl" value="${esc(d.viewUrl)}" placeholder="URL de VIDEO de go2rtc — ej. http://host:1984/api/stream.mp4?src=ptz1" style="padding:11px 13px;border-radius:6px;background:var(--card-2);border:1px solid var(--line);color:var(--ink)">
         <button type="submit" class="btn btn-primary" style="border:none">Guardar</button>
       </div>
     </form>
@@ -927,7 +928,7 @@ function viewPtz() {
     <div class="content">
       <div style="font:400 10px var(--mono);color:var(--ink-faint);margin-bottom:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${cam.onvif_url ? 'ONVIF · ' + esc(cam.onvif_url) : 'Sin URL ONVIF configurada todavía'}</div>
 
-      <div style="position:relative;aspect-ratio:16/9;border-radius:14px;overflow:hidden;background:repeating-linear-gradient(135deg,#242830 0 7px,#1c1f25 7px 14px);margin-bottom:7px">
+      <div style="position:relative;aspect-ratio:16/9;border-radius:6px;overflow:hidden;background:repeating-linear-gradient(135deg,#242830 0 7px,#1c1f25 7px 14px);margin-bottom:7px">
         ${cam.view_url ? `<video autoplay muted playsinline src="/api/ptz-cameras/${esc(cam.id)}/live-feed" data-snapshot-src="/api/ptz-cameras/${esc(cam.id)}/live-feed?mode=snapshot" style="position:absolute;inset:0;width:100%;height:100%;object-fit:cover"></video><div class="badge-live" style="position:absolute;top:10px;left:10px"><div class="dot dot-sm" style="background:var(--red)"></div><span>EN DIRECTO</span></div>` : `<div style="position:absolute;inset:0;display:flex;align-items:center;justify-content:center;font:500 10px var(--mono);color:var(--ink-faint);text-align:center;padding:0 16px">sin URL de video configurada</div>`}
         <div style="position:absolute;top:50%;left:50%;width:${frameW};height:${frameW};border:1.5px solid rgba(47,123,246,.85);border-radius:6px;box-shadow:0 0 0 9999px rgba(14,15,18,.45);transform:translate(-50%,-50%) translate(${s.x}px,${s.y}px);transition:all .22s cubic-bezier(.22,.9,.3,1)"></div>
         <div style="position:absolute;bottom:11px;right:11px;padding:4px 9px;border-radius:6px;background:rgba(14,15,18,.84);font:600 9.5px var(--mono);color:#c4c9cf">${s.zoom.toFixed(1)}×</div>
@@ -941,7 +942,7 @@ function viewPtz() {
       </div>
       <div class="grid-2" style="grid-template-columns:repeat(3,1fr);margin-bottom:18px">
         ${cam.presets.length === 0 ? `<div style="grid-column:1/-1;padding:10px 0;text-align:center;color:var(--ink-faint);font:400 11px var(--sans)">Sin encuadres guardados.</div>` : cam.presets.map(p => `<div style="position:relative">
-          <div class="row-tap" style="text-align:center;padding:9px 4px;border-radius:10px;background:${s.presetId === p.id ? 'rgba(47,123,246,.12)' : 'var(--card-2)'};border:1.5px solid ${s.presetId === p.id ? 'var(--accent)' : 'var(--line)'}" ${A('ptzGoPreset', p.id)}>
+          <div class="row-tap" style="text-align:center;padding:9px 4px;border-radius:6px;background:${s.presetId === p.id ? 'rgba(47,123,246,.12)' : 'var(--card-2)'};border:1.5px solid ${s.presetId === p.id ? 'var(--accent)' : 'var(--line)'}" ${A('ptzGoPreset', p.id)}>
             <div style="font:600 10.5px var(--sans);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(p.label)}</div>
           </div>
           <div class="row-tap" title="Eliminar" style="position:absolute;top:-6px;right:-6px;width:20px;height:20px;border-radius:50%;background:var(--card);border:1px solid var(--line);display:flex;align-items:center;justify-content:center;font:600 10px var(--sans);color:var(--red)" ${A('ptzDeletePresetNow', p.id)}>×</div>
@@ -951,21 +952,21 @@ function viewPtz() {
       <div class="row" style="gap:14px;align-items:center">
         <div style="display:grid;grid-template-columns:repeat(3,40px);grid-template-rows:repeat(3,40px);gap:5px;flex:none">
           <div></div>
-          <div class="row-tap" style="display:flex;align-items:center;justify-content:center;border-radius:10px;background:var(--card-2);border:1px solid var(--line)" ${A('ptzNudge', 'up')}>▲</div>
+          <div class="row-tap" style="display:flex;align-items:center;justify-content:center;border-radius:6px;background:var(--card-2);border:1px solid var(--line)" ${A('ptzNudge', 'up')}>▲</div>
           <div></div>
-          <div class="row-tap" style="display:flex;align-items:center;justify-content:center;border-radius:10px;background:var(--card-2);border:1px solid var(--line)" ${A('ptzNudge', 'left')}>◀</div>
-          <div class="row-tap" style="display:flex;align-items:center;justify-content:center;border-radius:10px;background:#1b1d22;border:1px solid rgba(255,255,255,.12);font:600 9px var(--mono);color:var(--ink-dim)" ${A('ptzHome')}>HOME</div>
-          <div class="row-tap" style="display:flex;align-items:center;justify-content:center;border-radius:10px;background:var(--card-2);border:1px solid var(--line)" ${A('ptzNudge', 'right')}>▶</div>
+          <div class="row-tap" style="display:flex;align-items:center;justify-content:center;border-radius:6px;background:var(--card-2);border:1px solid var(--line)" ${A('ptzNudge', 'left')}>◀</div>
+          <div class="row-tap" style="display:flex;align-items:center;justify-content:center;border-radius:6px;background:#1b1d22;border:1px solid rgba(255,255,255,.12);font:600 9px var(--mono);color:var(--ink-dim)" ${A('ptzHome')}>HOME</div>
+          <div class="row-tap" style="display:flex;align-items:center;justify-content:center;border-radius:6px;background:var(--card-2);border:1px solid var(--line)" ${A('ptzNudge', 'right')}>▶</div>
           <div></div>
-          <div class="row-tap" style="display:flex;align-items:center;justify-content:center;border-radius:10px;background:var(--card-2);border:1px solid var(--line)" ${A('ptzNudge', 'down')}>▼</div>
+          <div class="row-tap" style="display:flex;align-items:center;justify-content:center;border-radius:6px;background:var(--card-2);border:1px solid var(--line)" ${A('ptzNudge', 'down')}>▼</div>
           <div></div>
         </div>
         <div style="flex:1;min-width:0">
           <div class="row" style="justify-content:space-between;margin-bottom:8px"><span style="font:600 10.5px var(--mono);color:var(--ink-dimmer);letter-spacing:.08em">ZOOM</span><span style="font:600 11px var(--sans)">${s.zoom.toFixed(1)}×</span></div>
           <div class="progress-track" style="margin-bottom:10px"><div class="progress-fill" style="width:${zoomPct}%;background:var(--accent)"></div></div>
           <div class="row" style="gap:8px">
-            <div class="row-tap" style="flex:1;padding:11px 0;text-align:center;border-radius:10px;background:var(--card-2);border:1px solid var(--line);font:600 14px var(--sans)" ${A('ptzZoom', 'out')}>−</div>
-            <div class="row-tap" style="flex:1;padding:11px 0;text-align:center;border-radius:10px;background:var(--card-2);border:1px solid var(--line);font:600 14px var(--sans)" ${A('ptzZoom', 'in')}>+</div>
+            <div class="row-tap" style="flex:1;padding:11px 0;text-align:center;border-radius:6px;background:var(--card-2);border:1px solid var(--line);font:600 14px var(--sans)" ${A('ptzZoom', 'out')}>−</div>
+            <div class="row-tap" style="flex:1;padding:11px 0;text-align:center;border-radius:6px;background:var(--card-2);border:1px solid var(--line);font:600 14px var(--sans)" ${A('ptzZoom', 'in')}>+</div>
           </div>
         </div>
       </div>
@@ -975,7 +976,7 @@ function viewPtz() {
         if (siblings.length < 2) return '';
         return `<div class="eyebrow" style="margin-top:20px">Cámaras del local</div>
         <div class="row" style="gap:8px;flex-wrap:wrap;margin-bottom:6px">
-          ${siblings.map(c => `<div class="row-tap" style="padding:8px 12px;border-radius:10px;background:${c.id === cam.id ? 'rgba(47,123,246,.12)' : 'var(--card-2)'};border:1.5px solid ${c.id === cam.id ? 'var(--accent)' : 'var(--line)'};display:flex;align-items:center;gap:6px" ${A('openPtz', c.id)}>
+          ${siblings.map(c => `<div class="row-tap" style="padding:8px 12px;border-radius:6px;background:${c.id === cam.id ? 'rgba(47,123,246,.12)' : 'var(--card-2)'};border:1.5px solid ${c.id === cam.id ? 'var(--accent)' : 'var(--line)'};display:flex;align-items:center;gap:6px" ${A('openPtz', c.id)}>
             <div class="dot dot-sm" style="background:${c.view_url ? 'var(--red)' : 'var(--ink-faint)'}"></div>
             <span style="font:600 11.5px var(--sans)">${esc(c.name)}</span>
           </div>`).join('')}
@@ -990,15 +991,13 @@ function viewPtz() {
 }
 
 // Tarjeta compacta de TV para la grilla de 4 — mismo previewThumb() de
-// siempre, solo que más chica. Dos formas de abrir la ficha completa
-// (nombre, ubicación, orientación, etc. — la de siempre) para no depender
-// solo de mantener presionado, que en un navegador de celular real puede
-// chocar con gestos propios del sistema: mantener presionado SIEMPRE la
-// abre, y el toque corto TAMBIÉN la abre mientras no haya una fuente
-// elegida arriba (que es el caso normal: recién entras a la ubicación).
-// Con una fuente elegida, el toque corto pasa a prender/apagar ESA fuente
-// en esta TV — para eso mismo existe la grilla — y mantener presionado
-// sigue siendo el camino a la ficha.
+// siempre, solo que más chica. El toque corto ASIGNA la fuente elegida
+// arriba a esta TV (nunca la apaga — ver assignDeviceToChannel); abrir su
+// ficha completa (nombre, ubicación, orientación...) es SIEMPRE con
+// mantener presionado, sin excepción — así el toque nunca es ambiguo.
+// selectedChannelId solo puede venir null si de plano no hay ningún canal
+// en esta ubicación (caso aparte en locationSourceBlock); ahí el toque
+// corto cae de vuelta a abrir la ficha, ya que no hay nada que asignar.
 function deviceTile(d, selectedChannelId) {
   const status = deviceStatus(d);
   const playlist = remote.playlists.find(p => p.id === d.playlist);
@@ -1006,8 +1005,8 @@ function deviceTile(d, selectedChannelId) {
   const firstChannel = firstItem && firstItem.channel ? remote.channels.find(c => c.id === firstItem.channel) : null;
   const firstAsset = firstItem && !firstItem.channel ? remote.assets.find(a => a.id === firstItem.asset) : null;
   const active = selectedChannelId && d.liveChannel === selectedChannelId;
-  const tapAttrs = selectedChannelId ? A('toggleDeviceChannel', `${d.id}:${selectedChannelId}`) : A('openDevice', d.id);
-  return `<div class="card row-tap" style="overflow:hidden;position:relative;${active ? 'box-shadow:0 0 0 2px var(--accent)' : ''}" ${tapAttrs} data-longpress="openDevice" data-longpress-arg="${esc(d.id)}">
+  const tapAttrs = selectedChannelId ? A('assignDeviceToChannel', `${d.id}:${selectedChannelId}`) : A('openDevice', d.id);
+  return `<div class="card row-tap" style="overflow:hidden;position:relative;${active ? 'box-shadow:0 0 0 2px var(--amber)' : ''}" ${tapAttrs} data-longpress="openDevice" data-longpress-arg="${esc(d.id)}">
     ${d.alert ? `<div title="${esc(d.alert.text)}" style="position:absolute;top:4px;right:4px;z-index:1;font-size:11px;line-height:1;filter:drop-shadow(0 1px 2px rgba(0,0,0,.5))">🚨</div>` : ''}
     ${previewThumb(d, firstAsset, firstChannel)}
     <div style="padding:5px 6px 6px">
@@ -1028,7 +1027,7 @@ function bigPreview(d) {
   // mayoría de TVs de bar/restaurante son horizontales (16:9); solo las
   // que se configuraron explícitamente en vertical usan 9:16.
   const ratio = d.orientation === 'portrait' ? '9/16' : '16/9';
-  const box = `width:100%;aspect-ratio:${ratio};max-height:340px;border-radius:14px;overflow:hidden;background:repeating-linear-gradient(135deg,#242830 0 7px,#1c1f25 7px 14px);display:flex;align-items:center;justify-content:center;margin-bottom:14px;position:relative`;
+  const box = `width:100%;aspect-ratio:${ratio};max-height:340px;border-radius:6px;overflow:hidden;background:repeating-linear-gradient(135deg,#242830 0 7px,#1c1f25 7px 14px);display:flex;align-items:center;justify-content:center;margin-bottom:14px;position:relative`;
   // Fuente en vivo real: el navegador NUNCA pide la URL de la LAN
   // directamente (chocaría con contenido mixto y con la CSP del propio
   // backend) — intenta primero WebRTC directo (casi cero latencia si el
@@ -1143,7 +1142,7 @@ function mixOverlayHtml(m) {
     </div>${muteTag}`;
   }
   if (m.layout === 'corner') {
-    return `<div style="position:absolute;right:10px;bottom:10px;max-width:44%;background:${stripe};border-radius:10px;padding:8px 10px;display:flex;flex-direction:column;align-items:center;gap:4px;box-shadow:0 4px 14px rgba(0,0,0,.4);overflow:hidden">
+    return `<div style="position:absolute;right:10px;bottom:10px;max-width:44%;background:${stripe};border-radius:6px;padding:8px 10px;display:flex;flex-direction:column;align-items:center;gap:4px;box-shadow:0 4px 14px rgba(0,0,0,.4);overflow:hidden">
       ${promoAsset ? `<div style="position:absolute;inset:0;opacity:.3">${promoImg(promoAsset.id)}</div>` : ''}
       ${logoAsset ? `<div style="position:relative">${logoImg(logoAsset.id, 24)}</div>` : ''}
       ${m.text ? `<div style="position:relative;font:700 ${Math.round(fontSize * .65)}px var(--sans);color:${textColor};text-align:center;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:130px">${esc(m.text)}</div>` : ''}
@@ -1176,19 +1175,19 @@ function viewMix() {
   return `<div class="screen">
     <div class="topbar"><div class="back" ${A('backFromMix')}>‹</div><div class="title">Mezclar — ${esc(d.name)}</div></div>
     <div class="content">
-      <div style="width:100%;aspect-ratio:16/9;border-radius:14px;overflow:hidden;background:#000;position:relative;margin-bottom:16px">
+      <div style="width:100%;aspect-ratio:16/9;border-radius:6px;overflow:hidden;background:#000;position:relative;margin-bottom:16px">
         <div style="position:absolute;inset:0;display:flex;align-items:center;justify-content:center;font:500 10px var(--mono);color:var(--ink-faint)">señal en vivo</div>
         ${mixOverlayHtml(m)}
       </div>
 
       <div class="eyebrow">Composición</div>
       <div class="row" style="gap:6px;margin-bottom:6px">
-        ${layouts.map(([v, label]) => `<div class="row-tap" style="flex:1;text-align:center;padding:11px 4px;border-radius:12px;background:${m.layout === v ? 'rgba(47,123,246,.12)' : 'var(--card-2)'};border:1.5px solid ${m.layout === v ? 'var(--accent)' : 'var(--line)'};font:600 11px var(--sans)" ${A('setMixLayout', v)}>${label}</div>`).join('')}
+        ${layouts.map(([v, label]) => `<div class="row-tap" style="flex:1;text-align:center;padding:11px 4px;border-radius:6px;background:${m.layout === v ? 'rgba(47,123,246,.12)' : 'var(--card-2)'};border:1.5px solid ${m.layout === v ? 'var(--accent)' : 'var(--line)'};font:600 11px var(--sans)" ${A('setMixLayout', v)}>${label}</div>`).join('')}
       </div>
       <div style="font:400 10.5px var(--mono);color:var(--ink-dimmer);margin-bottom:18px">${layouts.find(([v]) => v === m.layout)[2]}</div>
 
       <div class="eyebrow">Fundido</div>
-      <div style="padding:14px 14px 10px;border-radius:14px;background:var(--card-2);border:1px solid var(--line);margin-bottom:18px">
+      <div style="padding:14px 14px 10px;border-radius:6px;background:var(--card-2);border:1px solid var(--line);margin-bottom:18px">
         <input type="range" min="0" max="3000" step="50" value="${m.fadeMs}" data-change="setMixFadeMs" style="width:100%;accent-color:var(--accent)">
         <div class="row" style="justify-content:space-between;margin-top:4px">
           <span style="font:400 9.5px var(--mono);color:var(--ink-faint)">corte seco</span>
@@ -1198,10 +1197,10 @@ function viewMix() {
       </div>
 
       <div class="eyebrow">Texto</div>
-      <input value="${esc(m.text)}" maxlength="140" placeholder="Texto a mostrar (ej. 2x1 en cervezas)" data-input="setMixText" style="width:100%;box-sizing:border-box;padding:11px 13px;border-radius:10px;background:var(--card-2);border:1px solid var(--line);color:var(--ink);margin-bottom:12px">
+      <input value="${esc(m.text)}" maxlength="140" placeholder="Texto a mostrar (ej. 2x1 en cervezas)" data-input="setMixText" style="width:100%;box-sizing:border-box;padding:11px 13px;border-radius:6px;background:var(--card-2);border:1px solid var(--line);color:var(--ink);margin-bottom:12px">
       <div class="row" style="gap:10px;margin-bottom:18px">
         <div class="row" style="gap:8px;flex:1;align-items:center">
-          <input type="color" value="${m.textColor}" data-change="setMixTextColor" style="width:36px;height:36px;border-radius:8px;border:1px solid var(--line);background:none;padding:0;flex:none">
+          <input type="color" value="${m.textColor}" data-change="setMixTextColor" style="width:36px;height:36px;border-radius:6px;border:1px solid var(--line);background:none;padding:0;flex:none">
           <span style="font:400 10px var(--mono);color:var(--ink-dimmer)">color de texto</span>
         </div>
         <div class="row" style="gap:8px;flex:1;align-items:center">
@@ -1213,7 +1212,7 @@ function viewMix() {
       <div class="eyebrow">Franja / panel</div>
       <div class="row" style="gap:10px;margin-bottom:18px">
         <div class="row" style="gap:8px;flex:1;align-items:center">
-          <input type="color" value="${m.stripeColor}" data-change="setMixStripeColor" style="width:36px;height:36px;border-radius:8px;border:1px solid var(--line);background:none;padding:0;flex:none">
+          <input type="color" value="${m.stripeColor}" data-change="setMixStripeColor" style="width:36px;height:36px;border-radius:6px;border:1px solid var(--line);background:none;padding:0;flex:none">
           <span style="font:400 10px var(--mono);color:var(--ink-dimmer)">color de fondo</span>
         </div>
         <div class="row" style="gap:8px;flex:1;align-items:center">
@@ -1224,20 +1223,20 @@ function viewMix() {
 
       <div class="eyebrow">Logo</div>
       <div class="row" style="gap:10px;align-items:center;margin-bottom:18px">
-        <div style="width:52px;height:52px;border-radius:10px;background:var(--card-2);border:1px solid var(--line);display:flex;align-items:center;justify-content:center;overflow:hidden;flex:none">
+        <div style="width:52px;height:52px;border-radius:6px;background:var(--card-2);border:1px solid var(--line);display:flex;align-items:center;justify-content:center;overflow:hidden;flex:none">
           ${logoAsset ? `<img src="${assetMediaUrl(logoAsset.id)}" style="max-width:100%;max-height:100%;object-fit:contain">` : `<span style="font:400 9px var(--mono);color:var(--ink-faint)">sin logo</span>`}
         </div>
         <label class="btn btn-ghost row-tap" style="flex:1;text-align:center;cursor:pointer;font-size:12px">
           ${logoAsset ? 'Cambiar logo' : 'Subir logo'}
           <input type="file" accept="image/jpeg,image/png,image/webp" style="display:none" data-change="pickMixLogo">
         </label>
-        ${logoAsset ? `<div class="row-tap" title="Quitar logo" style="width:36px;height:36px;border-radius:9px;flex:none;display:flex;align-items:center;justify-content:center;background:rgba(242,99,90,.12)" ${A('clearMixLogo')}>🗑️</div>` : ''}
+        ${logoAsset ? `<div class="row-tap" title="Quitar logo" style="width:36px;height:36px;border-radius:6px;flex:none;display:flex;align-items:center;justify-content:center;background:rgba(242,99,90,.12)" ${A('clearMixLogo')}>🗑️</div>` : ''}
       </div>
 
       <div class="eyebrow">Promo de fondo (biblioteca)</div>
       <div class="grid-2" style="grid-template-columns:repeat(4,1fr);gap:8px;margin-bottom:16px">
         ${images.length === 0 ? `<div style="grid-column:1/-1;padding:10px 0;text-align:center;color:var(--ink-faint);font:400 11px var(--sans)">Sin imágenes en tu biblioteca.</div>` : images.map(a => `
-        <div class="row-tap" style="position:relative;aspect-ratio:1/1;border-radius:10px;overflow:hidden;border:1.5px solid ${m.promo === a.id ? 'var(--accent)' : 'var(--line)'}" ${A('setMixPromo', a.id)}>
+        <div class="row-tap" style="position:relative;aspect-ratio:1/1;border-radius:6px;overflow:hidden;border:1.5px solid ${m.promo === a.id ? 'var(--accent)' : 'var(--line)'}" ${A('setMixPromo', a.id)}>
           <img src="${assetMediaUrl(a.id)}" style="width:100%;height:100%;object-fit:cover">
           ${m.promo === a.id ? `<div style="position:absolute;inset:0;background:rgba(47,123,246,.28);display:flex;align-items:center;justify-content:center;font:700 14px var(--sans);color:#fff">✓</div>` : ''}
         </div>`).join('')}
@@ -1250,7 +1249,7 @@ function viewMix() {
 
       <div class="row" style="gap:8px;margin-bottom:24px">
         <div class="btn btn-primary row-tap" style="flex:1;text-align:center" ${A('saveMixNow')}>Guardar mezcla</div>
-        <div class="row-tap" style="padding:12px 16px;border-radius:12px;background:var(--card-2);border:1px solid var(--line);font:600 12.5px var(--sans)" ${A('clearMixNow')}>Quitar</div>
+        <div class="row-tap" style="padding:12px 16px;border-radius:6px;background:var(--card-2);border:1px solid var(--line);font:600 12.5px var(--sans)" ${A('clearMixNow')}>Quitar</div>
       </div>
 
       <div class="row" style="justify-content:space-between;align-items:baseline;margin-bottom:9px">
@@ -1261,9 +1260,9 @@ function viewMix() {
         ${templates.length === 0 ? `<div style="padding:10px 0;text-align:center;color:var(--ink-faint);font:400 11px var(--sans)">Sin plantillas guardadas.</div>` : templates.map(t => `
         <div class="row card-flat row-tap" style="padding:11px 13px;gap:6px" ${A('applyMixTemplate', t.id)}>
           <div style="flex:1;min-width:0"><div style="font:600 12.5px var(--sans);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(t.name)}</div><div style="font:400 10px var(--mono);color:var(--ink-dimmer)">${layoutLabel[t.layout] || t.layout}${t.text ? ' · ' + esc(t.text) : ''}</div></div>
-          ${d.location ? `<div class="row-tap" title="Aplicar a toda la ubicación" style="width:28px;height:28px;border-radius:8px;flex:none;display:flex;align-items:center;justify-content:center;background:var(--card)" ${A('applyMixTemplateToLocation', t.id)}>📍</div>` : ''}
-          <div class="row-tap" title="Aplicar a todas mis TVs" style="width:28px;height:28px;border-radius:8px;flex:none;display:flex;align-items:center;justify-content:center;background:var(--card)" ${A('applyMixTemplateToAllNow', t.id)}>📡</div>
-          <div class="row-tap" title="Editar" style="width:28px;height:28px;border-radius:8px;flex:none;display:flex;align-items:center;justify-content:center;background:var(--card)" ${A('editMixTemplateNow', t.id)}>✏️</div>
+          ${d.location ? `<div class="row-tap" title="Aplicar a toda la ubicación" style="width:28px;height:28px;border-radius:6px;flex:none;display:flex;align-items:center;justify-content:center;background:var(--card)" ${A('applyMixTemplateToLocation', t.id)}>📍</div>` : ''}
+          <div class="row-tap" title="Aplicar a todas mis TVs" style="width:28px;height:28px;border-radius:6px;flex:none;display:flex;align-items:center;justify-content:center;background:var(--card)" ${A('applyMixTemplateToAllNow', t.id)}>📡</div>
+          <div class="row-tap" title="Editar" style="width:28px;height:28px;border-radius:6px;flex:none;display:flex;align-items:center;justify-content:center;background:var(--card)" ${A('editMixTemplateNow', t.id)}>✏️</div>
         </div>`).join('')}
       </div>
     </div>
@@ -1278,11 +1277,11 @@ function mixTemplateEditor(d) {
     <div class="sheet-grip"></div>
     <div class="row" style="gap:8px;margin-bottom:14px">
       <div style="font:700 18px var(--sans);flex:1;min-width:0">Editar plantilla</div>
-      <div class="row-tap" title="Cerrar" style="width:30px;height:30px;border-radius:9px;flex:none;display:flex;align-items:center;justify-content:center;background:var(--card-2);font:600 14px var(--sans)" ${A('cancelMixTemplate')}>✕</div>
+      <div class="row-tap" title="Cerrar" style="width:30px;height:30px;border-radius:6px;flex:none;display:flex;align-items:center;justify-content:center;background:var(--card-2);font:600 14px var(--sans)" ${A('cancelMixTemplate')}>✕</div>
     </div>
     <form data-submit="saveMixTemplateDraft">
       <div class="stack">
-        <input name="name" required value="${esc(d.name)}" placeholder="Nombre de la plantilla" style="padding:11px 13px;border-radius:10px;background:var(--card-2);border:1px solid var(--line);color:var(--ink)">
+        <input name="name" required value="${esc(d.name)}" placeholder="Nombre de la plantilla" style="padding:11px 13px;border-radius:6px;background:var(--card-2);border:1px solid var(--line);color:var(--ink)">
         <button type="submit" class="btn btn-primary" style="border:none">Guardar</button>
       </div>
     </form>
@@ -1300,7 +1299,7 @@ function deviceSheet() {
     <div class="row" style="gap:8px;margin-bottom:3px">
       <div class="dot" style="background:${STATUS_COLOR[status]}"></div>
       <div style="font:700 19px var(--sans);flex:1;min-width:0">${esc(d.name)}</div>
-      <div class="row-tap" title="Cerrar" style="width:30px;height:30px;border-radius:9px;flex:none;display:flex;align-items:center;justify-content:center;background:var(--card-2);font:600 14px var(--sans)" ${A('closeDevice')}>✕</div>
+      <div class="row-tap" title="Cerrar" style="width:30px;height:30px;border-radius:6px;flex:none;display:flex;align-items:center;justify-content:center;background:var(--card-2);font:600 14px var(--sans)" ${A('closeDevice')}>✕</div>
     </div>
     <div style="font:400 10.5px var(--mono);color:var(--ink-dimmer);margin-bottom:16px">${STATUS_LABEL[status]} · ${fmtTime(d.seen)}${d.error ? ' · ' + esc(d.error) : ''}</div>
     ${bigPreview(d)}
@@ -1313,26 +1312,26 @@ function deviceSheet() {
       const chans = (remote.channels || []).filter(c => !c.location || c.location === d.location);
       return `<div class="eyebrow">Fuente</div>
       <div class="row" style="gap:8px;margin-bottom:${d.liveSource ? '10px' : '16px'}">
-        <select data-change="setDeviceSource" data-arg="${esc(d.id)}" style="flex:1;min-width:0;padding:11px;border-radius:10px;background:var(--card-2);border:1.5px solid ${d.liveChannel ? 'var(--accent)' : 'var(--line)'};color:var(--ink)">
+        <select data-change="setDeviceSource" data-arg="${esc(d.id)}" style="flex:1;min-width:0;padding:11px;border-radius:6px;background:var(--card-2);border:1.5px solid ${d.liveChannel ? 'var(--accent)' : 'var(--line)'};color:var(--ink)">
           <option value="" ${!d.liveChannel ? 'selected' : ''}>▶ Lista de reproducción${playlist ? ' — ' + esc(playlist.name) : ''}</option>
           ${chans.map(c => `<option value="${esc(c.id)}" ${d.liveChannel === c.id ? 'selected' : ''}>🔴 ${esc(c.name)}</option>`).join('')}
         </select>
-        ${d.liveSource ? `<div class="row-tap" style="padding:7px 14px;border-radius:10px;flex:none;background:${d.mix ? 'rgba(47,123,246,.12)' : 'var(--card-2)'};border:1px solid ${d.mix ? 'var(--accent)' : 'var(--line)'};font:600 12px var(--sans)" ${A('openMix', d.id)}>🎛️ Mezclar</div>` : ''}
-        <div class="row-tap" style="padding:7px 14px;border-radius:10px;flex:none;background:${d.alert ? 'rgba(242,99,90,.14)' : 'var(--card-2)'};border:1px solid ${d.alert ? 'var(--red)' : 'var(--line)'};font:600 12px var(--sans)" ${A('sendAlertNow', d.id)}>🚨 Alerta</div>
+        ${d.liveSource ? `<div class="row-tap" style="padding:7px 14px;border-radius:6px;flex:none;background:${d.mix ? 'rgba(47,123,246,.12)' : 'var(--card-2)'};border:1px solid ${d.mix ? 'var(--accent)' : 'var(--line)'};font:600 12px var(--sans)" ${A('openMix', d.id)}>🎛️ Mezclar</div>` : ''}
+        <div class="row-tap" style="padding:7px 14px;border-radius:6px;flex:none;background:${d.alert ? 'rgba(242,99,90,.14)' : 'var(--card-2)'};border:1px solid ${d.alert ? 'var(--red)' : 'var(--line)'};font:600 12px var(--sans)" ${A('sendAlertNow', d.id)}>🚨 Alerta</div>
       </div>
       ${chans.length === 0 ? `<div class="row card-flat row-tap" style="padding:11px 14px;opacity:.6;margin-bottom:16px" ${A('goTab', 'content')}>
         <div style="flex:1;min-width:0"><div style="font:600 12.5px var(--sans);margin-bottom:2px">Sin canales todavía</div><div style="font:400 10.5px var(--mono);color:var(--ink-dimmer)">configúralos en Contenido → Canales</div></div>
       </div>` : ''}`;
     })()}
-    ${d.alert ? `<div class="row" style="gap:8px;padding:9px 12px;border-radius:10px;background:rgba(242,99,90,.1);border:1px solid rgba(242,99,90,.3);margin-bottom:12px">
+    ${d.alert ? `<div class="row" style="gap:8px;padding:9px 12px;border-radius:6px;background:rgba(242,99,90,.1);border:1px solid rgba(242,99,90,.3);margin-bottom:12px">
       <div style="flex:1;min-width:0"><div style="font:600 11.5px var(--sans);color:var(--red)">${esc(d.alert.text)}</div><div style="font:400 9.5px var(--mono);color:var(--ink-dimmer)">${{ info: 'informativa', warning: 'advertencia', critical: 'crítica' }[d.alert.level] || d.alert.level}</div></div>
       <div class="row-tap" style="font:600 11px var(--sans);color:var(--ink-dimmer)" ${A('clearAlertNow', d.id)}>Quitar</div>
     </div>` : ''}
-    ${d.location && remote.ptzCameras.some(c => c.location === d.location) ? `<div class="row-tap" style="text-align:center;padding:10px 0;border-radius:12px;background:var(--card-2);border:1px solid var(--line);font:600 12px var(--sans);margin-bottom:16px" ${A('openPtzFromDevice', d.id)}>📹 Control PTZ</div>` : ''}
+    ${d.location && remote.ptzCameras.some(c => c.location === d.location) ? `<div class="row-tap" style="text-align:center;padding:10px 0;border-radius:6px;background:var(--card-2);border:1px solid var(--line);font:600 12px var(--sans);margin-bottom:16px" ${A('openPtzFromDevice', d.id)}>📹 Control PTZ</div>` : ''}
 
     <div class="eyebrow">Lista de reproducción</div>
     <div class="row" style="gap:8px;margin-bottom:16px">
-      <select style="flex:1;padding:11px;border-radius:10px;background:var(--card-2);border:1px solid var(--line);color:var(--ink)">
+      <select style="flex:1;padding:11px;border-radius:6px;background:var(--card-2);border:1px solid var(--line);color:var(--ink)">
         ${remote.playlists.map(p => `<option value="${esc(p.id)}" ${p.id === d.playlist ? 'selected' : ''}>${esc(p.name)}</option>`).join('')}
       </select>
       <div class="btn btn-primary row-tap" style="padding:11px 16px;font-size:13px" ${A('assignPlaylistTo', d.id)}>Asignar</div>
@@ -1349,23 +1348,23 @@ function deviceSheet() {
       </div>
       ${ui.deviceMoreOpen ? `
       <div class="eyebrow">Ubicación</div>
-      <select data-change="moveDevice" data-arg="${esc(d.id)}" style="width:100%;padding:11px;border-radius:10px;background:var(--card-2);border:1px solid var(--line);color:var(--ink);margin-bottom:16px">
+      <select data-change="moveDevice" data-arg="${esc(d.id)}" style="width:100%;padding:11px;border-radius:6px;background:var(--card-2);border:1px solid var(--line);color:var(--ink);margin-bottom:16px">
         <option value="">Sin ubicación</option>
         ${remote.locations.map(l => `<option value="${esc(l.id)}" ${l.id === d.location ? 'selected' : ''}>${esc(l.name)}</option>`).join('')}
       </select>
 
       <div class="eyebrow">TV</div>
       <div data-display-form style="margin-bottom:16px" class="stack">
-        <select name="orientation" data-change="setDisplayOpt" data-arg="${esc(d.id)}" style="padding:11px;border-radius:10px;background:var(--card-2);border:1px solid var(--line);color:var(--ink)">
+        <select name="orientation" data-change="setDisplayOpt" data-arg="${esc(d.id)}" style="padding:11px;border-radius:6px;background:var(--card-2);border:1px solid var(--line);color:var(--ink)">
           <option value="auto" ${d.orientation === 'auto' ? 'selected' : ''}>Automática</option>
           <option value="landscape" ${d.orientation === 'landscape' ? 'selected' : ''}>Horizontal</option>
           <option value="portrait" ${d.orientation === 'portrait' ? 'selected' : ''}>Vertical</option>
         </select>
-        <select name="fit" data-change="setDisplayOpt" data-arg="${esc(d.id)}" style="padding:11px;border-radius:10px;background:var(--card-2);border:1px solid var(--line);color:var(--ink)">
+        <select name="fit" data-change="setDisplayOpt" data-arg="${esc(d.id)}" style="padding:11px;border-radius:6px;background:var(--card-2);border:1px solid var(--line);color:var(--ink)">
           <option value="cover" ${d.fit === 'cover' ? 'selected' : ''}>Rellenar (recorta)</option>
           <option value="contain" ${d.fit === 'contain' ? 'selected' : ''}>Mostrar completo</option>
         </select>
-        <select name="rotation" data-change="setDisplayOpt" data-arg="${esc(d.id)}" style="padding:11px;border-radius:10px;background:var(--card-2);border:1px solid var(--line);color:var(--ink)">
+        <select name="rotation" data-change="setDisplayOpt" data-arg="${esc(d.id)}" style="padding:11px;border-radius:6px;background:var(--card-2);border:1px solid var(--line);color:var(--ink)">
           ${[0, 90, 180, 270].map(r => `<option value="${r}" ${d.rotation === r ? 'selected' : ''}>Giro ${r}°</option>`).join('')}
         </select>
       </div>` : ''}`;
@@ -1385,15 +1384,15 @@ function viewPair() {
     <div class="topbar"><div class="back" ${A('cancelPair')}>‹</div><div class="title">Emparejar TV</div></div>
     <div class="content">
       <div style="font:400 12px/1.5 var(--sans);color:var(--ink-dim);margin-bottom:14px">La TV física muestra su propio QR y código al encenderse sin emparejar. Escanéalo con la cámara o escríbelo abajo.</div>
-      <div id="qr-reader" style="border-radius:14px;overflow:hidden;margin-bottom:12px;min-height:0"></div>
+      <div id="qr-reader" style="border-radius:6px;overflow:hidden;margin-bottom:12px;min-height:0"></div>
       <div class="btn btn-ghost row-tap" id="qr-toggle" style="margin-bottom:16px" ${A('toggleScanner')}>Abrir cámara</div>
       ${remote.locations.length === 0 ? `<div class="row card-flat row-tap" style="padding:11px 14px" ${A('addLocation')}>
         <div style="flex:1;min-width:0"><div style="font:600 12.5px var(--sans);margin-bottom:2px">Crea una ubicación primero</div><div style="font:400 10.5px var(--mono);color:var(--ink-dimmer)">toda TV vive dentro de una ubicación</div></div>
       </div>` : `<form data-submit="confirmPair">
         <div class="stack">
-          <input id="qr-code-field" name="code" required placeholder="Código (ej. ABC123DEF456)" style="padding:12px 14px;border-radius:12px;background:var(--card-2);border:1px solid var(--line);color:var(--ink);text-transform:uppercase">
-          <input name="name" required placeholder="Nombre (ej. Barra 01)" style="padding:12px 14px;border-radius:12px;background:var(--card-2);border:1px solid var(--line);color:var(--ink)">
-          <select name="location" required style="padding:12px 14px;border-radius:12px;background:var(--card-2);border:1px solid var(--line);color:var(--ink)">
+          <input id="qr-code-field" name="code" required placeholder="Código (ej. ABC123DEF456)" style="padding:12px 14px;border-radius:6px;background:var(--card-2);border:1px solid var(--line);color:var(--ink);text-transform:uppercase">
+          <input name="name" required placeholder="Nombre (ej. Barra 01)" style="padding:12px 14px;border-radius:6px;background:var(--card-2);border:1px solid var(--line);color:var(--ink)">
+          <select name="location" required style="padding:12px 14px;border-radius:6px;background:var(--card-2);border:1px solid var(--line);color:var(--ink)">
             <option value="" disabled selected>Elegir ubicación…</option>
             ${remote.locations.map(l => `<option value="${esc(l.id)}">${esc(l.name)}</option>`).join('')}
           </select>
@@ -1452,15 +1451,15 @@ function assetPreviewOverlay() {
   const a = ui.previewAssetId && remote.assets.find(x => x.id === ui.previewAssetId);
   if (!a) return '';
   const media = a.type.startsWith('image/')
-    ? `<img src="${assetMediaUrl(a.id)}" style="max-width:100%;max-height:100%;object-fit:contain;border-radius:10px;display:block">`
-    : `<video src="${assetMediaUrl(a.id)}" controls autoplay playsinline style="max-width:100%;max-height:100%;object-fit:contain;border-radius:10px;display:block"></video>`;
+    ? `<img src="${assetMediaUrl(a.id)}" style="max-width:100%;max-height:100%;object-fit:contain;border-radius:6px;display:block">`
+    : `<video src="${assetMediaUrl(a.id)}" controls autoplay playsinline style="max-width:100%;max-height:100%;object-fit:contain;border-radius:6px;display:block"></video>`;
   return `<div class="backdrop" style="background:rgba(6,7,9,.92);z-index:40" ${A('closeAssetPreview')}></div>
   <div style="position:fixed;inset:0;z-index:41;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:14px;padding:28px;pointer-events:none">
     <div style="pointer-events:auto;max-width:100%;max-height:76%;position:relative;animation:popUp .2s cubic-bezier(.22,.9,.3,1)">
       ${media}
       <div class="row-tap" title="Cerrar" style="position:absolute;top:-16px;right:-16px;width:32px;height:32px;border-radius:50%;background:var(--card);border:1px solid var(--line);display:flex;align-items:center;justify-content:center;font:600 14px var(--sans)" ${A('closeAssetPreview')}>✕</div>
     </div>
-    <div style="pointer-events:auto;display:flex;align-items:center;gap:10px;max-width:100%;background:var(--card);border:1px solid var(--line);border-radius:14px;padding:9px 13px">
+    <div style="pointer-events:auto;display:flex;align-items:center;gap:10px;max-width:100%;background:var(--card);border:1px solid var(--line);border-radius:6px;padding:9px 13px">
       <div style="font:600 12.5px var(--sans);color:#fff;max-width:130px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(a.name)}</div>
       <div class="row-tap" title="Renombrar" ${A('renameAsset', a.id)}>✏️</div>
       ${a.folder ? `<div class="row-tap" title="Quitar de la carpeta" ${A('removeAssetFromFolderNow', a.id)}>📁↩</div>` : `<select data-change="moveAssetToFolderNow" data-arg="${esc(a.id)}" style="font:400 10px var(--mono);background:var(--card-2);color:#fff;border:1px solid var(--line);border-radius:6px;padding:3px 5px">
@@ -1530,7 +1529,7 @@ function viewContent() {
           + Subir archivo
           <input type="file" accept="image/jpeg,image/png,image/webp,video/mp4" style="display:none" data-change="pickUpload">
         </label>
-        <div class="row-tap" style="flex:1;text-align:center;padding:12px 0;border-radius:14px;background:var(--card-2);border:1px solid var(--line);font:600 12.5px var(--sans)" ${A('newAssetFolder')}>📁+ Nueva carpeta</div>
+        <div class="row-tap" style="flex:1;text-align:center;padding:12px 0;border-radius:6px;background:var(--card-2);border:1px solid var(--line);font:600 12.5px var(--sans)" ${A('newAssetFolder')}>📁+ Nueva carpeta</div>
       </div>
 
       ${(remote.assetFolders || []).length > 0 ? `<div class="stack" style="margin-bottom:16px">
@@ -1565,12 +1564,12 @@ function channelEditor(d) {
     <div class="sheet-grip"></div>
     <div class="row" style="gap:8px;margin-bottom:14px">
       <div style="font:700 18px var(--sans);flex:1;min-width:0">${d.id ? 'Editar canal' : 'Nuevo canal'}</div>
-      <div class="row-tap" title="Cerrar" style="width:30px;height:30px;border-radius:9px;flex:none;display:flex;align-items:center;justify-content:center;background:var(--card-2);font:600 14px var(--sans)" ${A('cancelChannel')}>✕</div>
+      <div class="row-tap" title="Cerrar" style="width:30px;height:30px;border-radius:6px;flex:none;display:flex;align-items:center;justify-content:center;background:var(--card-2);font:600 14px var(--sans)" ${A('cancelChannel')}>✕</div>
     </div>
     <form data-submit="saveChannelDraft">
       <div class="stack">
-        <input name="name" required value="${esc(d.name)}" placeholder="Nombre (ej. Digital Signage, TV Bar)" style="padding:11px 13px;border-radius:10px;background:var(--card-2);border:1px solid var(--line);color:var(--ink)">
-        <input name="url" required value="${esc(d.url)}" placeholder="URL de VIDEO puro de go2rtc — ej. http://host:1984/api/stream.mp4?src=mivideo" style="padding:11px 13px;border-radius:10px;background:var(--card-2);border:1px solid var(--line);color:var(--ink)">
+        <input name="name" required value="${esc(d.name)}" placeholder="Nombre (ej. Digital Signage, TV Bar)" style="padding:11px 13px;border-radius:6px;background:var(--card-2);border:1px solid var(--line);color:var(--ink)">
+        <input name="url" required value="${esc(d.url)}" placeholder="URL de VIDEO puro de go2rtc — ej. http://host:1984/api/stream.mp4?src=mivideo" style="padding:11px 13px;border-radius:6px;background:var(--card-2);border:1px solid var(--line);color:var(--ink)">
         <button type="submit" class="btn btn-primary" style="border:none">Guardar</button>
       </div>
     </form>
@@ -1584,11 +1583,11 @@ function assetFolderEditor(d) {
     <div class="sheet-grip"></div>
     <div class="row" style="gap:8px;margin-bottom:14px">
       <div style="font:700 18px var(--sans);flex:1;min-width:0">${d.id ? 'Editar carpeta' : 'Nueva carpeta'}</div>
-      <div class="row-tap" title="Cerrar" style="width:30px;height:30px;border-radius:9px;flex:none;display:flex;align-items:center;justify-content:center;background:var(--card-2);font:600 14px var(--sans)" ${A('cancelAssetFolder')}>✕</div>
+      <div class="row-tap" title="Cerrar" style="width:30px;height:30px;border-radius:6px;flex:none;display:flex;align-items:center;justify-content:center;background:var(--card-2);font:600 14px var(--sans)" ${A('cancelAssetFolder')}>✕</div>
     </div>
     <form data-submit="saveAssetFolderDraft">
       <div class="stack">
-        <input name="name" required value="${esc(d.name)}" placeholder="Nombre (ej. Promociones, Menú)" style="padding:11px 13px;border-radius:10px;background:var(--card-2);border:1px solid var(--line);color:var(--ink)">
+        <input name="name" required value="${esc(d.name)}" placeholder="Nombre (ej. Promociones, Menú)" style="padding:11px 13px;border-radius:6px;background:var(--card-2);border:1px solid var(--line);color:var(--ink)">
         <button type="submit" class="btn btn-primary" style="border:none">Guardar</button>
       </div>
     </form>
@@ -1604,7 +1603,7 @@ function viewAssetFolder() {
   return `<div class="screen">
     <div class="topbar"><div class="back" ${A('backFromAssetFolder')}>‹</div><div class="title">📁 ${esc(f.name)}</div></div>
     <div class="content">
-      <select data-change="addAssetToFolder" style="width:100%;padding:11px;border-radius:10px;background:var(--card-2);border:1px solid var(--line);color:var(--ink);margin-bottom:16px">
+      <select data-change="addAssetToFolder" style="width:100%;padding:11px;border-radius:6px;background:var(--card-2);border:1px solid var(--line);color:var(--ink);margin-bottom:16px">
         <option value="">+ Agregar archivo a esta carpeta…</option>
         ${available.map(a => `<option value="${esc(a.id)}">${esc(a.name)}</option>`).join('')}
       </select>
@@ -1623,9 +1622,9 @@ function playlistEditor(d) {
     <div class="sheet-grip"></div>
     <div class="row" style="gap:8px;margin-bottom:14px">
       <div style="font:700 18px var(--sans);flex:1;min-width:0">${d.id ? 'Editar lista' : 'Nueva lista'}</div>
-      <div class="row-tap" title="Cerrar" style="width:30px;height:30px;border-radius:9px;flex:none;display:flex;align-items:center;justify-content:center;background:var(--card-2);font:600 14px var(--sans)" ${A('cancelPlaylist')}>✕</div>
+      <div class="row-tap" title="Cerrar" style="width:30px;height:30px;border-radius:6px;flex:none;display:flex;align-items:center;justify-content:center;background:var(--card-2);font:600 14px var(--sans)" ${A('cancelPlaylist')}>✕</div>
     </div>
-    <input value="${esc(d.name)}" placeholder="Nombre de la lista" data-input="setDraftName" style="width:100%;box-sizing:border-box;padding:12px 14px;border-radius:12px;background:var(--card-2);border:1px solid var(--line);color:var(--ink);margin-bottom:14px">
+    <input value="${esc(d.name)}" placeholder="Nombre de la lista" data-input="setDraftName" style="width:100%;box-sizing:border-box;padding:12px 14px;border-radius:6px;background:var(--card-2);border:1px solid var(--line);color:var(--ink);margin-bottom:14px">
     <div class="stack" style="margin-bottom:12px">
       ${d.items.map((it, idx) => {
         const c = it.channel ? remote.channels.find(c => c.id === it.channel) : null;
@@ -1633,13 +1632,13 @@ function playlistEditor(d) {
         const label = c ? c.name : (a ? a.name : (it.channel || it.asset));
         return `<div class="row card-flat" style="padding:9px 12px">
           <div style="flex:1;min-width:0;font:500 12px var(--sans);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${c ? '🔴 ' : ''}${esc(label)}</div>
-          <input type="number" min="1" value="${it.seconds}" data-change="setDraftSeconds" data-arg="${idx}" style="width:56px;padding:6px;border-radius:8px;background:var(--card);border:1px solid var(--line);color:var(--ink);text-align:center">
+          <input type="number" min="1" value="${it.seconds}" data-change="setDraftSeconds" data-arg="${idx}" style="width:56px;padding:6px;border-radius:6px;background:var(--card);border:1px solid var(--line);color:var(--ink);text-align:center">
           <span style="font:400 10px var(--mono);color:var(--ink-dimmer)">seg</span>
           <div class="row-tap" style="color:var(--red);font:600 14px var(--sans)" ${A('removeDraftItem', idx)}>×</div>
         </div>`;
       }).join('') || `<div style="padding:10px 0;text-align:center;color:var(--ink-faint);font:400 11.5px var(--sans)">Agrega archivos o canales abajo.</div>`}
     </div>
-    <select data-change="addDraftItem" style="width:100%;padding:11px;border-radius:10px;background:var(--card-2);border:1px solid var(--line);color:var(--ink);margin-bottom:14px">
+    <select data-change="addDraftItem" style="width:100%;padding:11px;border-radius:6px;background:var(--card-2);border:1px solid var(--line);color:var(--ink);margin-bottom:14px">
       <option value="">+ Agregar archivo o canal…</option>
       ${(remote.channels || []).length ? `<optgroup label="Canales en vivo">${remote.channels.map(c => `<option value="channel:${esc(c.id)}">🔴 ${esc(c.name)}</option>`).join('')}</optgroup>` : ''}
       ${remote.assets.length ? `<optgroup label="Archivos">${remote.assets.map(a => `<option value="asset:${esc(a.id)}">${esc(a.name)}</option>`).join('')}</optgroup>` : ''}
@@ -1688,18 +1687,18 @@ function scheduleEditor(d) {
     <div class="sheet-grip"></div>
     <div class="row" style="gap:8px;margin-bottom:14px">
       <div style="font:700 18px var(--sans);flex:1;min-width:0">${d.id ? 'Editar programa' : 'Nuevo programa'}</div>
-      <div class="row-tap" title="Cerrar" style="width:30px;height:30px;border-radius:9px;flex:none;display:flex;align-items:center;justify-content:center;background:var(--card-2);font:600 14px var(--sans)" ${A('cancelSchedule')}>✕</div>
+      <div class="row-tap" title="Cerrar" style="width:30px;height:30px;border-radius:6px;flex:none;display:flex;align-items:center;justify-content:center;background:var(--card-2);font:600 14px var(--sans)" ${A('cancelSchedule')}>✕</div>
     </div>
     <form data-submit="saveScheduleDraft">
       <div class="stack">
-        <input name="name" required value="${esc(d.name)}" placeholder="Nombre (ej. Menú del día)" style="padding:11px 13px;border-radius:10px;background:var(--card-2);border:1px solid var(--line);color:var(--ink)">
-        <select name="device" style="padding:11px 13px;border-radius:10px;background:var(--card-2);border:1px solid var(--line);color:var(--ink)">${remote.devices.map(x => `<option value="${esc(x.id)}" ${x.id === d.device ? 'selected' : ''}>${esc(x.name)}</option>`).join('')}</select>
-        <select name="playlist" style="padding:11px 13px;border-radius:10px;background:var(--card-2);border:1px solid var(--line);color:var(--ink)">${remote.playlists.map(x => `<option value="${esc(x.id)}" ${x.id === d.playlist ? 'selected' : ''}>${esc(x.name)}</option>`).join('')}</select>
-        <div class="row" style="gap:4px">${[0,1,2,3,4,5,6].map(n => `<div class="row-tap" ${A('toggleDraftDay', n)} style="flex:1;text-align:center;padding:9px 0;border-radius:8px;font:600 11px var(--sans);background:${d.days.includes(n) ? 'var(--accent)' : 'var(--card-2)'};color:${d.days.includes(n) ? '#fff' : 'var(--ink-dim)'}">${DAY_SHORT[n]}</div>`).join('')}</div>
-        <div class="row" style="gap:8px"><input name="start" type="time" value="${d.start}" style="flex:1;padding:11px;border-radius:10px;background:var(--card-2);border:1px solid var(--line);color:var(--ink)"><input name="end" type="time" value="${d.end}" style="flex:1;padding:11px;border-radius:10px;background:var(--card-2);border:1px solid var(--line);color:var(--ink)"></div>
-        <input name="timezone" value="${esc(d.timezone)}" placeholder="Zona horaria (ej. America/Mexico_City)" style="padding:11px 13px;border-radius:10px;background:var(--card-2);border:1px solid var(--line);color:var(--ink)">
-        <div class="row" style="gap:8px"><input name="fromDate" type="date" value="${d.fromDate || ''}" style="flex:1;padding:11px;border-radius:10px;background:var(--card-2);border:1px solid var(--line);color:var(--ink)"><input name="toDate" type="date" value="${d.toDate || ''}" style="flex:1;padding:11px;border-radius:10px;background:var(--card-2);border:1px solid var(--line);color:var(--ink)"></div>
-        <input name="priority" type="number" min="0" max="100" value="${d.priority}" placeholder="Prioridad (0-100)" style="padding:11px 13px;border-radius:10px;background:var(--card-2);border:1px solid var(--line);color:var(--ink)">
+        <input name="name" required value="${esc(d.name)}" placeholder="Nombre (ej. Menú del día)" style="padding:11px 13px;border-radius:6px;background:var(--card-2);border:1px solid var(--line);color:var(--ink)">
+        <select name="device" style="padding:11px 13px;border-radius:6px;background:var(--card-2);border:1px solid var(--line);color:var(--ink)">${remote.devices.map(x => `<option value="${esc(x.id)}" ${x.id === d.device ? 'selected' : ''}>${esc(x.name)}</option>`).join('')}</select>
+        <select name="playlist" style="padding:11px 13px;border-radius:6px;background:var(--card-2);border:1px solid var(--line);color:var(--ink)">${remote.playlists.map(x => `<option value="${esc(x.id)}" ${x.id === d.playlist ? 'selected' : ''}>${esc(x.name)}</option>`).join('')}</select>
+        <div class="row" style="gap:4px">${[0,1,2,3,4,5,6].map(n => `<div class="row-tap" ${A('toggleDraftDay', n)} style="flex:1;text-align:center;padding:9px 0;border-radius:6px;font:600 11px var(--sans);background:${d.days.includes(n) ? 'var(--accent)' : 'var(--card-2)'};color:${d.days.includes(n) ? '#fff' : 'var(--ink-dim)'}">${DAY_SHORT[n]}</div>`).join('')}</div>
+        <div class="row" style="gap:8px"><input name="start" type="time" value="${d.start}" style="flex:1;padding:11px;border-radius:6px;background:var(--card-2);border:1px solid var(--line);color:var(--ink)"><input name="end" type="time" value="${d.end}" style="flex:1;padding:11px;border-radius:6px;background:var(--card-2);border:1px solid var(--line);color:var(--ink)"></div>
+        <input name="timezone" value="${esc(d.timezone)}" placeholder="Zona horaria (ej. America/Mexico_City)" style="padding:11px 13px;border-radius:6px;background:var(--card-2);border:1px solid var(--line);color:var(--ink)">
+        <div class="row" style="gap:8px"><input name="fromDate" type="date" value="${d.fromDate || ''}" style="flex:1;padding:11px;border-radius:6px;background:var(--card-2);border:1px solid var(--line);color:var(--ink)"><input name="toDate" type="date" value="${d.toDate || ''}" style="flex:1;padding:11px;border-radius:6px;background:var(--card-2);border:1px solid var(--line);color:var(--ink)"></div>
+        <input name="priority" type="number" min="0" max="100" value="${d.priority}" placeholder="Prioridad (0-100)" style="padding:11px 13px;border-radius:6px;background:var(--card-2);border:1px solid var(--line);color:var(--ink)">
         <button type="submit" class="btn btn-primary" style="border:none;margin-top:4px">Guardar programa</button>
       </div>
     </form>
@@ -1725,7 +1724,7 @@ function viewStudio() {
 }
 
 function studioConfigPrompt(c) {
-  return `<div style="padding:16px;border-radius:14px;background:var(--card-2);border:1px solid var(--line)">
+  return `<div style="padding:16px;border-radius:6px;background:var(--card-2);border:1px solid var(--line)">
     <div style="font:600 13px var(--sans);margin-bottom:6px">${remote.role === 'admin' ? 'Falta configurar Estudio IA' : 'Estudio IA no está configurado todavía'}</div>
     <div style="font:400 11.5px/1.5 var(--sans);color:var(--ink-dim);margin-bottom:${remote.role === 'admin' ? '12px' : '0'}">${c.hasKey ? 'Hay una clave cargada pero falta habilitarla o verificarla.' : 'Necesitas una clave API de OpenAI propia de esta empresa.'}</div>
     ${remote.role === 'admin' ? `<div class="btn btn-primary row-tap" style="font-size:12.5px" ${A('editStudioConfig')}>Configurar ahora</div>` : `<div style="font:400 11px var(--sans);color:var(--ink-faint)">Pide a un administrador que la configure.</div>`}
@@ -1735,9 +1734,9 @@ function studioConfigPrompt(c) {
 function studioConfigForm(f) {
   return `<form data-submit="saveStudioConfigNow">
     <div class="stack">
-      <input name="apiKey" type="password" placeholder="Clave API de OpenAI (sk-...)" autocomplete="off" style="padding:12px 14px;border-radius:12px;background:var(--card-2);border:1px solid var(--line);color:var(--ink)">
+      <input name="apiKey" type="password" placeholder="Clave API de OpenAI (sk-...)" autocomplete="off" style="padding:12px 14px;border-radius:6px;background:var(--card-2);border:1px solid var(--line);color:var(--ink)">
       <div style="font:400 10.5px var(--mono);color:var(--ink-faint)">Déjala vacía si ya hay una guardada y solo quieres cambiar el cupo.</div>
-      <input name="monthlyLimit" type="number" min="0" max="1000" value="${f.monthlyLimit}" placeholder="Cupo mensual de solicitudes" style="padding:12px 14px;border-radius:12px;background:var(--card-2);border:1px solid var(--line);color:var(--ink)">
+      <input name="monthlyLimit" type="number" min="0" max="1000" value="${f.monthlyLimit}" placeholder="Cupo mensual de solicitudes" style="padding:12px 14px;border-radius:6px;background:var(--card-2);border:1px solid var(--line);color:var(--ink)">
       <label class="row" style="gap:10px"><input type="checkbox" name="enabled" ${f.enabled ? 'checked' : ''}><span style="font:500 12.5px var(--sans)">Habilitar Estudio IA</span></label>
       <button type="submit" class="btn btn-primary" style="border:none">Guardar</button>
       <div class="btn btn-ghost row-tap" ${A('cancelStudioConfig')}>Cancelar</div>
@@ -1770,39 +1769,39 @@ function viewStudioDraft() {
   return `<div class="screen">
     <div class="topbar"><div class="back" ${A('backToStudio')}>‹</div><div class="title">${esc(d.name)}</div></div>
     <div class="content">
-      ${job && job.status === 'ready' ? `<canvas id="studio-canvas" style="width:100%;border-radius:14px;margin-bottom:8px;background:#000"></canvas>
+      ${job && job.status === 'ready' ? `<canvas id="studio-canvas" style="width:100%;border-radius:6px;margin-bottom:8px;background:#000"></canvas>
           <div class="btn btn-primary row-tap" style="margin-bottom:16px" ${A('exportStudioNow')}>Guardar en biblioteca</div>`
         : job && (job.status === 'processing' || job.status === 'saving') ? `<div class="thumb" style="aspect-ratio:16/9;margin-bottom:16px"><span>generando…</span></div>`
-        : job && job.status === 'storage_failed' ? `<div style="padding:14px;border-radius:12px;background:rgba(240,180,41,.09);border:1px solid rgba(240,180,41,.25);margin-bottom:16px">
+        : job && job.status === 'storage_failed' ? `<div style="padding:14px;border-radius:6px;background:rgba(240,180,41,.09);border:1px solid rgba(240,180,41,.25);margin-bottom:16px">
             <div style="font:400 11.5px/1.5 var(--sans);color:#d3b271;margin-bottom:10px">${esc(job.error || 'No se pudo guardar.')}</div>
             <div class="btn btn-ghost row-tap" style="font-size:12px" ${A('retryStudioSaveNow')}>Reintentar guardado</div>
           </div>`
-        : job && (job.status === 'failed' || job.status === 'uncertain') ? `<div style="padding:14px;border-radius:12px;background:rgba(242,99,90,.09);border:1px solid rgba(242,99,90,.25);margin-bottom:16px;font:400 11.5px/1.5 var(--sans);color:#e2a29c">${esc(job.error || 'No se pudo generar.')}</div>`
+        : job && (job.status === 'failed' || job.status === 'uncertain') ? `<div style="padding:14px;border-radius:6px;background:rgba(242,99,90,.09);border:1px solid rgba(242,99,90,.25);margin-bottom:16px;font:400 11.5px/1.5 var(--sans);color:#e2a29c">${esc(job.error || 'No se pudo generar.')}</div>`
         : `<div class="thumb" style="aspect-ratio:16/9;margin-bottom:16px"><span>sin generar todavía</span></div>`}
 
       <div class="eyebrow">Datos del poster</div>
       <div class="stack" style="margin-bottom:14px">
-        <select data-change="setDraftKind" style="padding:11px;border-radius:10px;background:var(--card-2);border:1px solid var(--line);color:var(--ink)">
+        <select data-change="setDraftKind" style="padding:11px;border-radius:6px;background:var(--card-2);border:1px solid var(--line);color:var(--ink)">
           ${Object.entries(STUDIO_KIND_LABEL).map(([k, label]) => `<option value="${k}" ${d.data.kind === k ? 'selected' : ''}>${label}</option>`).join('')}
         </select>
-        <select data-change="setDraftOrientation" style="padding:11px;border-radius:10px;background:var(--card-2);border:1px solid var(--line);color:var(--ink)">
+        <select data-change="setDraftOrientation" style="padding:11px;border-radius:6px;background:var(--card-2);border:1px solid var(--line);color:var(--ink)">
           <option value="landscape" ${d.data.orientation === 'landscape' ? 'selected' : ''}>Horizontal (1920×1080)</option>
           <option value="portrait" ${d.data.orientation === 'portrait' ? 'selected' : ''}>Vertical (1080×1920)</option>
           <option value="square" ${d.data.orientation === 'square' ? 'selected' : ''}>Cuadrada (1080×1080)</option>
         </select>
-        <input value="${esc(d.data.style)}" placeholder="Estilo (ej. cálido, fotográfico, minimal)" data-input="setDraftField" data-arg="style" style="padding:11px 13px;border-radius:10px;background:var(--card-2);border:1px solid var(--line);color:var(--ink)">
-        <textarea placeholder="Notas para la IA (qué se ve en el fondo)" data-input="setDraftField" data-arg="notes" rows="2" style="padding:11px 13px;border-radius:10px;background:var(--card-2);border:1px solid var(--line);color:var(--ink);font-family:var(--sans);resize:vertical">${esc(d.data.notes)}</textarea>
+        <input value="${esc(d.data.style)}" placeholder="Estilo (ej. cálido, fotográfico, minimal)" data-input="setDraftField" data-arg="style" style="padding:11px 13px;border-radius:6px;background:var(--card-2);border:1px solid var(--line);color:var(--ink)">
+        <textarea placeholder="Notas para la IA (qué se ve en el fondo)" data-input="setDraftField" data-arg="notes" rows="2" style="padding:11px 13px;border-radius:6px;background:var(--card-2);border:1px solid var(--line);color:var(--ink);font-family:var(--sans);resize:vertical">${esc(d.data.notes)}</textarea>
       </div>
 
       <div class="eyebrow">Capas de texto</div>
       <div class="stack" style="margin-bottom:12px">
         ${d.data.layers.map((l, idx) => `<div class="card-flat" style="padding:10px 12px">
-          <input value="${esc(l.text)}" data-input="setLayerField" data-arg="${idx}:text" style="width:100%;box-sizing:border-box;padding:8px 10px;border-radius:8px;background:var(--card);border:1px solid var(--line);color:var(--ink);margin-bottom:6px">
+          <input value="${esc(l.text)}" data-input="setLayerField" data-arg="${idx}:text" style="width:100%;box-sizing:border-box;padding:8px 10px;border-radius:6px;background:var(--card);border:1px solid var(--line);color:var(--ink);margin-bottom:6px">
           <div class="row" style="gap:6px">
-            <input type="number" value="${l.x}" min="0" max="95" data-change="setLayerField" data-arg="${idx}:x" title="X %" style="width:0;flex:1;padding:6px;border-radius:8px;background:var(--card);border:1px solid var(--line);color:var(--ink);text-align:center">
-            <input type="number" value="${l.y}" min="0" max="95" data-change="setLayerField" data-arg="${idx}:y" title="Y %" style="width:0;flex:1;padding:6px;border-radius:8px;background:var(--card);border:1px solid var(--line);color:var(--ink);text-align:center">
-            <input type="number" value="${l.size}" min="12" max="160" data-change="setLayerField" data-arg="${idx}:size" title="Tamaño" style="width:0;flex:1;padding:6px;border-radius:8px;background:var(--card);border:1px solid var(--line);color:var(--ink);text-align:center">
-            <input type="color" value="${l.color}" data-change="setLayerField" data-arg="${idx}:color" style="width:36px;padding:0;border-radius:8px;border:1px solid var(--line);background:none;flex:none">
+            <input type="number" value="${l.x}" min="0" max="95" data-change="setLayerField" data-arg="${idx}:x" title="X %" style="width:0;flex:1;padding:6px;border-radius:6px;background:var(--card);border:1px solid var(--line);color:var(--ink);text-align:center">
+            <input type="number" value="${l.y}" min="0" max="95" data-change="setLayerField" data-arg="${idx}:y" title="Y %" style="width:0;flex:1;padding:6px;border-radius:6px;background:var(--card);border:1px solid var(--line);color:var(--ink);text-align:center">
+            <input type="number" value="${l.size}" min="12" max="160" data-change="setLayerField" data-arg="${idx}:size" title="Tamaño" style="width:0;flex:1;padding:6px;border-radius:6px;background:var(--card);border:1px solid var(--line);color:var(--ink);text-align:center">
+            <input type="color" value="${l.color}" data-change="setLayerField" data-arg="${idx}:color" style="width:36px;padding:0;border-radius:6px;border:1px solid var(--line);background:none;flex:none">
             <div class="row-tap" style="color:var(--red);font:600 14px var(--sans);flex:none;padding:0 4px" ${A('removeTextLayer', idx)}>×</div>
           </div>
         </div>`).join('') || `<div style="padding:10px 0;text-align:center;color:var(--ink-faint);font:400 11.5px var(--sans)">Sin capas de texto.</div>`}
@@ -1894,7 +1893,7 @@ function viewSettings() {
       </div>
       <div class="row card-flat row-tap" style="padding:13px 14px" ${A('toggleTheme')}>
         <div style="flex:1;min-width:0"><div style="font:600 13px var(--sans)">Tema oscuro</div><div style="font:400 10.5px var(--mono);color:var(--ink-dimmer)">${ui.theme === 'dark' ? 'Activado' : 'Desactivado (claro)'}</div></div>
-        <div style="width:44px;height:26px;border-radius:13px;background:${ui.theme === 'dark' ? 'var(--accent)' : 'var(--card-2)'};border:1px solid var(--line);position:relative;flex:none;transition:background .15s">
+        <div style="width:44px;height:26px;border-radius:6px;background:${ui.theme === 'dark' ? 'var(--accent)' : 'var(--card-2)'};border:1px solid var(--line);position:relative;flex:none;transition:background .15s">
           <div style="position:absolute;top:2px;left:${ui.theme === 'dark' ? '20px' : '2px'};width:20px;height:20px;border-radius:50%;background:#fff;transition:left .15s;box-shadow:0 1px 3px rgba(0,0,0,.3)"></div>
         </div>
       </div>

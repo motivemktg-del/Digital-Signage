@@ -6,7 +6,7 @@
   --accent:#2f7bf6; --accent-ink:#ffffff;
   --red:#f2635a; --amber:#f0b429; --green:#3ddc97;
   --sans:system-ui,-apple-system,'Segoe UI',Roboto,sans-serif; --mono:ui-monospace,'SFMono-Regular','Roboto Mono',Menlo,Consolas,monospace;
-  --radius-lg:22px; --radius-md:14px; --radius-sm:10px;
+  --radius-lg:6px; --radius-md:6px; --radius-sm:6px;
 }
 /* Tema claro — Ajustes ⚙️ lo activa con un booleano (toggleTheme en
    app.js), agrega/quita la clase .light en <html> y la guarda en
@@ -30,6 +30,17 @@ body{
   -webkit-tap-highlight-color:transparent; overscroll-behavior-y:none;
 }
 #app{min-height:100vh; display:flex; flex-direction:column}
+
+/* Safari/Chrome en el celular hacen zoom automático al enfocar un campo
+   con letra menor a 16px (piensan que si no, no se va a poder leer) — y a
+   veces se queda pegado el zoom al desenfocar, descuadrando toda la
+   página. app.js pone tamaños de letra más chicos (12-14px) por estilo
+   inline en la mayoría de sus <input>/<select>/<textarea> — el !important
+   es a propósito, es la única forma de ganarle a esos inline styles sin
+   reescribir cada uno de ellos uno por uno. No afecta la letra que se VE
+   normalmente (esos 16px son el tamaño real del campo mientras se
+   escribe, el resto del texto de la app sigue con sus tamaños de siempre). */
+input,select,textarea{font-size:16px!important}
 
 /* Layout shell -------------------------------------------------------- */
 .screen{
@@ -122,7 +133,7 @@ body{
 @keyframes popUp{from{transform:translateY(24px);opacity:0}to{transform:translateY(0);opacity:1}}
 .sheet{
   position:fixed; left:50%; transform:translateX(-50%); bottom:0; width:100%; max-width:520px;
-  background:var(--card); border-top:1px solid var(--line); border-radius:22px 22px 0 0;
+  background:var(--card); border-top:1px solid var(--line); border-radius:6px 6px 0 0;
   padding:12px 18px calc(28px + env(safe-area-inset-bottom)); z-index:21;
   max-height:82vh; overflow-y:auto;
   box-shadow:var(--shadow-2);
