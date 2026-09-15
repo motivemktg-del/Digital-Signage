@@ -35,6 +35,13 @@ public class MainActivity extends Activity {
  private final Handler ui=new Handler(Looper.getMainLooper());
  private final ScheduledExecutorService network=Executors.newSingleThreadScheduledExecutor();
  private FrameLayout root;
+ // Etiqueta de error SIEMPRE visible en la esquina de la pantalla física —
+ // antes el último error solo se veía en el panel remoto (heartbeat), y en
+ // la práctica nadie lo revisaba ahí a tiempo mientras se diagnosticaba una
+ // pantalla negra. root.removeAllViews() (en stopPlayback(), cada vez que
+ // cambia de fuente) se la llevaría si fuera hija de "root" — por eso vive
+ // en un contenedor "outer" que envuelve a "root", ver onCreate().
+ private TextView errorBadge;
  private volatile JSONObject current;
  private volatile String secret="",version="",lastError="";
  private String sequence="";
@@ -105,7 +112,11 @@ public class MainActivity extends Activity {
  @Override public void onCreate(Bundle b){super.onCreate(b);
   getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
   getWindow().getDecorView().setSystemUiVisibility(View.SYSTEM_UI_FLAG_FULLSCREEN|View.SYSTEM_UI_FLAG_HIDE_NAVIGATION|View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY);
-  root=new FrameLayout(this);root.setBackgroundColor(Color.BLACK);setContentView(root);root.setClipChildren(true);root.addOnLayoutChangeListener((v,l,t,r,bottom,ol,ot,or,ob)->{if(r-l!=or-ol||bottom-t!=ob-ot)layoutDisplay();});
+  FrameLayout outer=new FrameLayout(this);outer.setBackgroundColor(Color.BLACK);
+  root=new FrameLayout(this);root.setBackgroundColor(Color.BLACK);outer.addView(root,new FrameLayout.LayoutParams(-1,-1));root.setClipChildren(true);root.addOnLayoutChangeListener((v,l,t,r,bottom,ol,ot,or,ob)->{if(r-l!=or-ol||bottom-t!=ob-ot)layoutDisplay();});
+  errorBadge=new TextView(this);errorBadge.setTextColor(Color.WHITE);errorBadge.setBackgroundColor(0xaa000000);errorBadge.setTextSize(11);errorBadge.setPadding(20,10,20,10);errorBadge.setVisibility(View.GONE);
+  outer.addView(errorBadge,new FrameLayout.LayoutParams(FrameLayout.LayoutParams.WRAP_CONTENT,FrameLayout.LayoutParams.WRAP_CONTENT,Gravity.BOTTOM|Gravity.START));
+  setContentView(outer);
   assets=new File(getFilesDir(),"media");assets.mkdirs();
   secret=getPreferences(0).getString("secret","");
   try{current=new JSONObject(new String(new AtomicFile(new File(getFilesDir(),"manifest.json")).readFully(),StandardCharsets.UTF_8));version=current.getString("version");liveSource=current.optString("liveSource","");liveSourceRtsp=current.optString("liveSourceRtsp","");liveSourceWebrtc=current.optString("liveSourceWebrtc","");}catch(Exception ignored){}
@@ -180,7 +191,7 @@ public class MainActivity extends Activity {
     // congelada en la última señal en vivo para siempre, sin volver
     // nunca a la lista de fotos/videos. Bug real, no solo caso raro.
     boolean saliendoDeEnVivo=!liveSource.isEmpty()&&next.optString("liveSource","").isEmpty();
-    current=next;version=next.getString("version");lastError="";liveSource=next.optString("liveSource","");liveSourceRtsp=next.optString("liveSourceRtsp","");liveSourceWebrtc=next.optString("liveSourceWebrtc","");
+    current=next;version=next.getString("version");setError("");liveSource=next.optString("liveSource","");liveSourceRtsp=next.optString("liveSourceRtsp","");liveSourceWebrtc=next.optString("liveSourceWebrtc","");
     ui.post(()->{sequence="";layoutDisplay();
      if(!liveSource.isEmpty())playLive(liveSource);
      else if(next.optBoolean("paused"))stopPlayback();
@@ -192,7 +203,7 @@ public class MainActivity extends Activity {
    secret="";version="";current=null;getPreferences(0).edit().remove("secret").remove("pairQr").remove("pairCode").apply();new AtomicFile(new File(getFilesDir(),"manifest.json")).delete();
    ui.post(()->{stopPlayback();message("Pantalla desvinculada\nGenerando un nuevo código…");});
    return false;
-  }catch(Exception e){lastError=e.getMessage()==null?"Error de sincronización":e.getMessage();if(current==null)ui.post(()->{if(!playing)message("No se pudo conectar\nSe intentará de nuevo automáticamente");});try{if(!secret.isEmpty())request("/api/player/heartbeat",new JSONObject().put("version",version).put("error",lastError));}catch(Exception ignored){}return false;}
+  }catch(Exception e){setError(e.getMessage()==null?"Error de sincronización":e.getMessage());if(current==null)ui.post(()->{if(!playing)message("No se pudo conectar\nSe intentará de nuevo automáticamente");});try{if(!secret.isEmpty())request("/api/player/heartbeat",new JSONObject().put("version",version).put("error",lastError));}catch(Exception ignored){}return false;}
  }
  // Un item de tipo "live" (canal embebido en una lista, ver
  // deviceManifest()/expand() en server.js) no es un archivo que se
@@ -222,6 +233,18 @@ public class MainActivity extends Activity {
   }
   return manifest.getJSONArray("items");
  }
+ // Guarda el último error Y lo refleja YA MISMO en la pantalla física (ver
+ // errorBadge en onCreate()) — antes lastError solo viajaba al panel remoto
+ // por el heartbeat, y en la práctica quedaba invisible mientras se
+ // diagnosticaba una pantalla negra en el sitio. setError("") lo oculta.
+ private void setError(String msg){
+  lastError=msg;
+  ui.post(()->{
+   if(errorBadge==null)return;
+   if(msg==null||msg.isEmpty())errorBadge.setVisibility(View.GONE);
+   else{errorBadge.setText(msg);errorBadge.setVisibility(View.VISIBLE);}
+  });
+ }
  private void stopPlayback(){ui.removeCallbacks(advance);if(alertBlinkRunnable!=null){ui.removeCallbacks(alertBlinkRunnable);alertBlinkRunnable=null;}if(mediaPlayer!=null){mediaPlayer.release();mediaPlayer=null;}if(exoPlayer!=null){exoPlayer.release();exoPlayer=null;}if(webrtcPc!=null){webrtcPc.close();webrtcPc=null;}if(webrtcRenderer!=null){webrtcRenderer.release();webrtcRenderer=null;}video=null;canvas=null;videoWidth=0;videoHeight=0;if(photo!=null){photo.setImageDrawable(null);photo=null;}mixOverlay=null;lastMixJson=null;alertOverlay=null;livePlayingUrl="";playing=false;root.removeAllViews();}
  // Si el manifiesto trae liveSourceWebrtc, se intenta ESA primero — WebRTC
  // puede pedirle un keyframe al encoder al conectarse, cosa que RTSP no
@@ -250,12 +273,12 @@ public class MainActivity extends Activity {
    public void onSurfaceTextureAvailable(SurfaceTexture texture,int width,int height){
     try{final MediaPlayer player=new MediaPlayer();mediaPlayer=player;Surface surface=new Surface(texture);player.setSurface(surface);surface.release();player.setDataSource(url);
      final boolean[] settled={false};
-     player.setOnPreparedListener(mp->{if(mp!=mediaPlayer||settled[0])return;settled[0]=true;videoWidth=mp.getVideoWidth();videoHeight=mp.getVideoHeight();layoutDisplay();mp.start();});
+     player.setOnPreparedListener(mp->{if(mp!=mediaPlayer||settled[0])return;settled[0]=true;setError("");videoWidth=mp.getVideoWidth();videoHeight=mp.getVideoHeight();layoutDisplay();mp.start();});
      player.setOnVideoSizeChangedListener((mp,w,h)->{videoWidth=w;videoHeight=h;layoutDisplay();});
      // Una señal en vivo se puede cortar (cámara/encoder se reinicia, red
      // parpadea) — a diferencia de un video local, aquí sí vale la pena
      // reintentar sola en vez de darse por vencida.
-     player.setOnErrorListener((mp,what,extra)->{if(settled[0])return true;settled[0]=true;lastError="Señal en vivo interrumpida, reintentando…";livePlayingUrl="";ui.postDelayed(()->{if(url.equals(liveSource))playLive(url);},2000);return true;});
+     player.setOnErrorListener((mp,what,extra)->{if(settled[0])return true;settled[0]=true;setError("Señal en vivo interrumpida, reintentando…");livePlayingUrl="";ui.postDelayed(()->{if(url.equals(liveSource))playLive(url);},2000);return true;});
      player.prepareAsync();
      // Mismo vigilante que en playNext(): prepareAsync() a veces se cuelga
      // sin avisar (decodificador de hardware todavía ocupado por lo que se
@@ -263,9 +286,9 @@ public class MainActivity extends Activity {
      // siempre en vez de reintentar.
      ui.postDelayed(()->{
       if(settled[0]||player!=mediaPlayer)return;settled[0]=true;
-      lastError="La señal en vivo no respondió a tiempo, reintentando…";livePlayingUrl="";ui.postDelayed(()->{if(url.equals(liveSource))playLive(url);},1500);
+      setError("La señal en vivo no respondió a tiempo, reintentando…");livePlayingUrl="";ui.postDelayed(()->{if(url.equals(liveSource))playLive(url);},1500);
      },10000);
-    }catch(Exception error){lastError="No se pudo abrir la señal en vivo";livePlayingUrl="";ui.postDelayed(()->{if(url.equals(liveSource))playLive(url);},3000);}
+    }catch(Exception error){setError("No se pudo abrir la señal en vivo");livePlayingUrl="";ui.postDelayed(()->{if(url.equals(liveSource))playLive(url);},3000);}
    }
    public void onSurfaceTextureSizeChanged(SurfaceTexture texture,int width,int height){}
    public boolean onSurfaceTextureDestroyed(SurfaceTexture texture){return true;}
@@ -380,7 +403,7 @@ public class MainActivity extends Activity {
   final boolean[] gaveUp={false};
   final Runnable giveUp=()->ui.post(()->{
    if(gaveUp[0]||!webrtcUrl.equals(livePlayingUrl))return; gaveUp[0]=true;
-   livePlayingUrl="";lastError="WebRTC no logró conectar, usando RTSP…";fallback.run();
+   livePlayingUrl="";setError("WebRTC no logró conectar, usando RTSP…");fallback.run();
   });
   final org.webrtc.PeerConnection[] pcHolder=new org.webrtc.PeerConnection[1];
   org.webrtc.PeerConnection pc=webrtcFactory.createPeerConnection(new org.webrtc.PeerConnection.RTCConfiguration(new ArrayList<>()),new org.webrtc.PeerConnection.Observer(){
@@ -480,7 +503,7 @@ public class MainActivity extends Activity {
    @Override public void onVideoSizeChanged(androidx.media3.common.VideoSize size){videoWidth=size.width;videoHeight=size.height;layoutDisplay();}
    @Override public void onPlayerError(androidx.media3.common.PlaybackException error){
     if(player!=exoPlayer)return;
-    lastError="Señal en vivo interrumpida, reintentando…";livePlayingUrl="";
+    setError("Señal en vivo interrumpida, reintentando…");livePlayingUrl="";
     ui.postDelayed(()->{if(rtspUrl.equals(liveSourceRtsp))playLiveRtsp(rtspUrl);},2000);
    }
   });
@@ -524,10 +547,10 @@ public class MainActivity extends Activity {
      @Override public void onVideoSizeChanged(androidx.media3.common.VideoSize size){videoWidth=size.width;videoHeight=size.height;layoutDisplay();}
      @Override public void onPlaybackStateChanged(int state){
       if(player!=exoPlayer)return;
-      if(state==androidx.media3.common.Player.STATE_READY)settled[0]=true;
+      if(state==androidx.media3.common.Player.STATE_READY){settled[0]=true;setError("");}
       if(state==androidx.media3.common.Player.STATE_ENDED)playNext();
      }
-     @Override public void onPlayerError(androidx.media3.common.PlaybackException error){if(player!=exoPlayer)return;settled[0]=true;lastError="Video no compatible: "+error.getMessage();ui.postDelayed(advance,1500);}
+     @Override public void onPlayerError(androidx.media3.common.PlaybackException error){if(player!=exoPlayer)return;settled[0]=true;setError("Video no compatible: "+error.getMessage());ui.postDelayed(advance,1500);}
     });
     player.setPlayWhenReady(true);player.prepare();
     // Vigilante: mismo caso límite de siempre (más raro con ExoPlayer, pero
@@ -535,13 +558,13 @@ public class MainActivity extends Activity {
     // reintento en vez de quedar colgado sin ningún aviso.
     ui.postDelayed(()->{
      if(settled[0]||player!=exoPlayer)return;settled[0]=true;
-     lastError="El video no respondió a tiempo, reintentando…";ui.postDelayed(advance,1500);
+     setError("El video no respondió a tiempo, reintentando…");ui.postDelayed(advance,1500);
     },10000);
    }else{
     BitmapFactory.Options opts=new BitmapFactory.Options();opts.inJustDecodeBounds=true;BitmapFactory.decodeFile(file.getAbsolutePath(),opts);int max=Math.max(getResources().getDisplayMetrics().widthPixels,getResources().getDisplayMetrics().heightPixels);opts.inSampleSize=1;while(Math.max(opts.outWidth,opts.outHeight)/opts.inSampleSize>max*2)opts.inSampleSize*=2;opts.inJustDecodeBounds=false;
-    Bitmap bitmap=BitmapFactory.decodeFile(file.getAbsolutePath(),opts);if(bitmap==null)throw new IOException("Imagen no compatible");photo=new ImageView(this);photo.setScaleType(ImageView.ScaleType.CENTER_CROP);photo.setImageBitmap(bitmap);canvas.addView(photo,new FrameLayout.LayoutParams(-1,-1));layoutDisplay();ui.postDelayed(advance,item.getInt("seconds")*1000L);
+    Bitmap bitmap=BitmapFactory.decodeFile(file.getAbsolutePath(),opts);if(bitmap==null)throw new IOException("Imagen no compatible");photo=new ImageView(this);photo.setScaleType(ImageView.ScaleType.CENTER_CROP);photo.setImageBitmap(bitmap);canvas.addView(photo,new FrameLayout.LayoutParams(-1,-1));layoutDisplay();setError("");ui.postDelayed(advance,item.getInt("seconds")*1000L);
    }
-  }catch(Exception e){lastError="No se pudo reproducir el archivo";ui.postDelayed(advance,3000);}
+  }catch(Exception e){setError("No se pudo reproducir el archivo: "+e.getMessage());ui.postDelayed(advance,3000);}
  }
  // Canal embebido en una lista: se reproduce igual que un video/foto de
  // la rotación, solo que en vivo (RTSP si go2rtc lo permite, si no MP4
@@ -562,7 +585,7 @@ public class MainActivity extends Activity {
    player.setMediaSource(source);
    player.addListener(new androidx.media3.common.Player.Listener(){
     @Override public void onVideoSizeChanged(androidx.media3.common.VideoSize size){videoWidth=size.width;videoHeight=size.height;layoutDisplay();}
-    @Override public void onPlayerError(androidx.media3.common.PlaybackException error){if(player!=exoPlayer)return;lastError="Canal no disponible, saltando…";ui.removeCallbacks(advance);ui.postDelayed(advance,1500);}
+    @Override public void onPlayerError(androidx.media3.common.PlaybackException error){if(player!=exoPlayer)return;setError("Canal no disponible, saltando…");ui.removeCallbacks(advance);ui.postDelayed(advance,1500);}
    });
    player.setPlayWhenReady(true);player.prepare();
    ui.postDelayed(advance,millis);
@@ -574,16 +597,16 @@ public class MainActivity extends Activity {
      try{final MediaPlayer player=new MediaPlayer();mediaPlayer=player;Surface surface=new Surface(texture);player.setSurface(surface);surface.release();player.setDataSource(url);
       player.setOnPreparedListener(mp->{if(mp!=mediaPlayer)return;videoWidth=mp.getVideoWidth();videoHeight=mp.getVideoHeight();layoutDisplay();mp.start();});
       player.setOnVideoSizeChangedListener((mp,w,h)->{videoWidth=w;videoHeight=h;layoutDisplay();});
-      player.setOnErrorListener((mp,what,extra)->{lastError="Canal no disponible, saltando…";ui.removeCallbacks(advance);ui.postDelayed(advance,1500);return true;});
+      player.setOnErrorListener((mp,what,extra)->{setError("Canal no disponible, saltando…");ui.removeCallbacks(advance);ui.postDelayed(advance,1500);return true;});
       player.prepareAsync();
-     }catch(Exception error){lastError="No se pudo abrir el canal";ui.removeCallbacks(advance);ui.postDelayed(advance,1500);}
+     }catch(Exception error){setError("No se pudo abrir el canal");ui.removeCallbacks(advance);ui.postDelayed(advance,1500);}
     }
     public void onSurfaceTextureSizeChanged(SurfaceTexture texture,int width,int height){}
     public boolean onSurfaceTextureDestroyed(SurfaceTexture texture){return true;}
     public void onSurfaceTextureUpdated(SurfaceTexture texture){}
    });
    ui.postDelayed(advance,millis);
-  }catch(Exception e){lastError="No se pudo abrir el canal";ui.postDelayed(advance,1500);}
+  }catch(Exception e){setError("No se pudo abrir el canal");ui.postDelayed(advance,1500);}
  }
  private void layoutDisplay(){
   if(canvas==null||current==null)return;
