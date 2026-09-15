@@ -5,7 +5,7 @@
 // Se sube a mano en cada cambio de este archivo — se muestra en Ajustes
 // (viewSettings()) para poder confirmar de un vistazo si el celular ya
 // está corriendo el JS nuevo o todavía sirve una copia vieja de caché.
-const BUILD = '2026-09-15.3';
+const BUILD = '2026-09-15.4';
 
 // El QR de una TV sin emparejar ahora es una URL http(s) de verdad
 // (?pair=CODE, ver /api/pair/start en server.js) — para que la cámara
@@ -34,6 +34,15 @@ const ui = {
   // ubicación no tiene entrada acá todavía, se usa su primera fuente
   // disponible (canal antes que lista) como default.
   locationSource: {},
+  // Id de la TV marcada para Mezclar (borde amarillo) — tocar una TV que YA
+  // es la fuente activa (borde verde) no la reasigna (sería un no-op) ni la
+  // apaga (nunca), la marca/desmarca para esto en su lugar. Sirve para
+  // elegir CUÁL TV mezclar cuando varias comparten el mismo canal — sin
+  // esto, openMixForChannel() solo podía adivinar la primera. Se limpia al
+  // cambiar de fuente o de ubicación (ver setLocationSourcePreview/
+  // openLocation/openUnassignedLocation) para no dejar una marca vieja
+  // apuntando a una TV que ya ni siquiera se está viendo.
+  mixTvSelected: null,
   currentFolderId: null,   // carpeta de biblioteca abierta en viewAssetFolder
   previewAssetId: null,    // asset mostrado a pantalla completa (lightbox)
   playlistDraft: null, // { id, name, items:[{asset,seconds}|{channel,seconds}] } al crear/editar lista
@@ -269,18 +278,19 @@ const actions = {
     if (!confirm('¿Eliminar este encuadre guardado?')) return;
     await run(deletePtzPreset(ui.ptzCameraId, presetId), 'Encuadre eliminado');
   },
-  openLocation(id) { ui.currentLocationId = id; ui.route = 'locationDetail'; render(); },
+  openLocation(id) { ui.currentLocationId = id; ui.mixTvSelected = null; ui.route = 'locationDetail'; render(); },
   // "Sin ubicación" no es una fila real de la tabla locations — no tiene
   // id para pasarle a openLocation() (A() convertiría null en '' y
   // rompería el filtro d.location===loc.id, que sí necesita null real).
-  openUnassignedLocation() { ui.currentLocationId = null; ui.route = 'locationDetail'; render(); },
+  openUnassignedLocation() { ui.currentLocationId = null; ui.mixTvSelected = null; ui.route = 'locationDetail'; render(); },
   // Cambiar de fuente en esta vista NO toca ningún TV todavía — solo
   // decide qué fuente se está mirando/configurando (el preview grande y
   // qué TVs se resaltan en la grilla). Tocar una TV abajo sí actúa de una.
   // Se guarda por ubicación (data-arg = su locationKey) para que la
   // próxima vez que se entre a ESA ubicación se quede en la misma fuente
-  // — nunca vuelve a quedar "en blanco".
-  setLocationSourcePreview(locationKey, select) { ui.locationSource[locationKey] = select.value; render(); },
+  // — nunca vuelve a quedar "en blanco". mixTvSelected se limpia porque
+  // apuntaba a una TV de la fuente anterior, ya no aplica a esta.
+  setLocationSourcePreview(locationKey, select) { ui.locationSource[locationKey] = select.value; ui.mixTvSelected = null; render(); },
   // Tocar una TV en la grilla de una fuente: la ASIGNA a esta fuente — NO
   // es un interruptor de encendido/apagado. Una TV nunca se apaga sola
   // desde acá tocándola de nuevo; solo deja de tener ESTA fuente cuando
@@ -294,6 +304,14 @@ const actions = {
   async assignDeviceToSource(arg) {
     const [deviceId, kind, sourceId] = arg.split(':');
     const d = remote.devices.find(x => x.id === deviceId);
+    const hasLive = d && (d.liveChannel || d.liveSource);
+    const alreadyActive = kind === 'channel' ? (d && d.liveChannel === sourceId) : (d && !hasLive && d.playlist === sourceId);
+    // Tocar una TV que YA es la fuente activa no la reasigna (sería un
+    // no-op) ni la apaga (nunca) — la marca/desmarca para Mezclar (borde
+    // amarillo) en su lugar. Es la única forma de elegir CUÁL TV mezclar
+    // cuando varias comparten el mismo canal (openMixForChannel() antes
+    // solo podía adivinar la primera).
+    if (alreadyActive) { ui.mixTvSelected = ui.mixTvSelected === deviceId ? null : deviceId; render(); return; }
     // El toast dice EXACTAMENTE qué se asignó (canal o lista, con nombre) —
     // antes decía solo "Fuente activada" para los dos casos, así que si el
     // selector de arriba se había quedado sin querer en un canal, tocar la
@@ -303,7 +321,6 @@ const actions = {
       ? (remote.channels.find(c => c.id === sourceId)?.name || 'canal')
       : (remote.playlists.find(p => p.id === sourceId)?.name || 'lista');
     if (kind === 'channel') {
-      if (d && d.liveChannel === sourceId) return; // ya está en esta fuente, nada que hacer
       await run(setLiveChannel(deviceId, sourceId), `Canal "${label}" activado`);
     } else {
       // OJO: una TV puede tener una señal en vivo activa SIN tener
@@ -316,16 +333,16 @@ const actions = {
       // como "señal en vivo interrumpida, reintentando" sin fin — la lista
       // nunca llegaba a probarse. Ahora se revisa liveSource también, no
       // solo liveChannel.
-      const hasLive = d && (d.liveChannel || d.liveSource);
-      if (d && !hasLive && d.playlist === sourceId) return; // ya está mostrando esta lista
       await run(Promise.all([assignPlaylist(deviceId, sourceId), hasLive ? setLiveChannel(deviceId, null) : null].filter(Boolean)), `Lista "${label}" asignada`);
     }
   },
-  // Mezclar desde la vista de fuente: sin una TV puntual seleccionada (acá
-  // se trabaja por fuente, no por TV), se abre el editor sobre la PRIMERA
-  // TV con esa fuente activa — mismo mix que ya existe, ver openMix().
+  // Mezclar desde la vista de fuente: si el admin marcó una TV puntual
+  // (borde amarillo, ver assignDeviceToSource) y esa TV de verdad tiene
+  // esta fuente activa, se abre el editor sobre ESA — si no marcó ninguna,
+  // se usa la primera TV con esta fuente activa, como antes.
   openMixForChannel(channelId) {
-    const d = remote.devices.find(x => x.liveChannel === channelId);
+    const marked = ui.mixTvSelected && remote.devices.find(x => x.id === ui.mixTvSelected && x.liveChannel === channelId);
+    const d = marked || remote.devices.find(x => x.liveChannel === channelId);
     if (!d) return showToast('Ninguna TV tiene esta fuente activa todavía', true);
     actions.openMix(d.id);
   },
@@ -1098,8 +1115,9 @@ function deviceTile(d, selected) {
   const firstChannel = firstItem && firstItem.channel ? remote.channels.find(c => c.id === firstItem.channel) : null;
   const firstAsset = firstItem && !firstItem.channel ? remote.assets.find(a => a.id === firstItem.asset) : null;
   const active = selected && (selected.kind === 'channel' ? d.liveChannel === selected.id : (!d.liveChannel && d.playlist === selected.id));
+  const mixSelected = active && ui.mixTvSelected === d.id;
   const tapAttrs = selected ? A('assignDeviceToSource', `${d.id}:${selected.kind}:${selected.id}`) : A('openDevice', d.id);
-  return `<div class="card row-tap" style="overflow:hidden;position:relative;${active ? 'box-shadow:0 0 0 2px var(--green)' : ''}" ${tapAttrs} data-longpress="openDevice" data-longpress-arg="${esc(d.id)}">
+  return `<div class="card row-tap" style="overflow:hidden;position:relative;${mixSelected ? 'box-shadow:0 0 0 2px var(--amber)' : active ? 'box-shadow:0 0 0 2px var(--green)' : ''}" ${tapAttrs} data-longpress="openDevice" data-longpress-arg="${esc(d.id)}">
     ${d.alert ? `<div title="${esc(d.alert.text)}" style="position:absolute;top:4px;right:4px;z-index:1;font-size:11px;line-height:1;filter:drop-shadow(0 1px 2px rgba(0,0,0,.5))">🚨</div>` : ''}
     ${d.error ? `<div title="${esc(d.error)}" style="position:absolute;top:4px;left:4px;z-index:1;font-size:11px;line-height:1;filter:drop-shadow(0 1px 2px rgba(0,0,0,.5))">⚠️</div>` : ''}
     ${previewThumb(d, firstAsset, firstChannel)}
