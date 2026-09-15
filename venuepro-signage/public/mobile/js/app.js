@@ -5,7 +5,7 @@
 // Se sube a mano en cada cambio de este archivo — se muestra en Ajustes
 // (viewSettings()) para poder confirmar de un vistazo si el celular ya
 // está corriendo el JS nuevo o todavía sirve una copia vieja de caché.
-const BUILD = '2026-09-15.2';
+const BUILD = '2026-09-15.3';
 
 // El QR de una TV sin emparejar ahora es una URL http(s) de verdad
 // (?pair=CODE, ver /api/pair/start en server.js) — para que la cámara
@@ -294,9 +294,17 @@ const actions = {
   async assignDeviceToSource(arg) {
     const [deviceId, kind, sourceId] = arg.split(':');
     const d = remote.devices.find(x => x.id === deviceId);
+    // El toast dice EXACTAMENTE qué se asignó (canal o lista, con nombre) —
+    // antes decía solo "Fuente activada" para los dos casos, así que si el
+    // selector de arriba se había quedado sin querer en un canal, tocar la
+    // TV activaba ESE canal (correcto, es justo lo que dice el selector) y
+    // el aviso genérico no dejaba notar el error a tiempo.
+    const label = kind === 'channel'
+      ? (remote.channels.find(c => c.id === sourceId)?.name || 'canal')
+      : (remote.playlists.find(p => p.id === sourceId)?.name || 'lista');
     if (kind === 'channel') {
       if (d && d.liveChannel === sourceId) return; // ya está en esta fuente, nada que hacer
-      await run(setLiveChannel(deviceId, sourceId), 'Fuente activada');
+      await run(setLiveChannel(deviceId, sourceId), `Canal "${label}" activado`);
     } else {
       // OJO: una TV puede tener una señal en vivo activa SIN tener
       // liveChannel puesto — por ejemplo una cámara PTZ empujada a todas
@@ -310,7 +318,7 @@ const actions = {
       // solo liveChannel.
       const hasLive = d && (d.liveChannel || d.liveSource);
       if (d && !hasLive && d.playlist === sourceId) return; // ya está mostrando esta lista
-      await run(Promise.all([assignPlaylist(deviceId, sourceId), hasLive ? setLiveChannel(deviceId, null) : null].filter(Boolean)), 'Fuente activada');
+      await run(Promise.all([assignPlaylist(deviceId, sourceId), hasLive ? setLiveChannel(deviceId, null) : null].filter(Boolean)), `Lista "${label}" asignada`);
     }
   },
   // Mezclar desde la vista de fuente: sin una TV puntual seleccionada (acá
