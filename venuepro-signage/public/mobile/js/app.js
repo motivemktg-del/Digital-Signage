@@ -10,12 +10,15 @@ const ui = {
   detailDeviceId: null,
   deviceMoreOpen: false, // "Ubicación" + "Pantalla" en la ficha van juntas en un solo colapsable, arranca cerrado
   currentLocationId: null, // ubicación abierta en viewLocationDetail (null = "Sin ubicación", un grupo real, no "ninguna")
-  // { [ubicaciónId]: canalId } — qué fuente se está viendo/configurando en
-  // el selector de cada ubicación (viewLocationDetail). Se acuerda de la
-  // última elegida por ubicación (no se resetea al salir y volver a
-  // entrar) — nunca queda "en blanco": si una ubicación no tiene entrada
-  // acá todavía, se usa su primer canal disponible como default.
-  locationSourceChannel: {},
+  // { [ubicaciónId]: "channel:ID"|"playlist:ID" } — qué fuente se está
+  // viendo/configurando en el selector de cada ubicación
+  // (viewLocationDetail). Una fuente puede ser un canal en vivo O una
+  // lista de reproducción — ambas son "algo que un TV puede estar
+  // mostrando". Se acuerda de la última elegida por ubicación (no se
+  // resetea al salir y volver a entrar) — nunca queda "en blanco": si una
+  // ubicación no tiene entrada acá todavía, se usa su primera fuente
+  // disponible (canal antes que lista) como default.
+  locationSource: {},
   currentFolderId: null,   // carpeta de biblioteca abierta en viewAssetFolder
   previewAssetId: null,    // asset mostrado a pantalla completa (lightbox)
   playlistDraft: null, // { id, name, items:[{asset,seconds}|{channel,seconds}] } al crear/editar lista
@@ -242,19 +245,27 @@ const actions = {
   // Se guarda por ubicación (data-arg = su locationKey) para que la
   // próxima vez que se entre a ESA ubicación se quede en la misma fuente
   // — nunca vuelve a quedar "en blanco".
-  setLocationSourcePreview(locationKey, select) { ui.locationSourceChannel[locationKey] = select.value; render(); },
+  setLocationSourcePreview(locationKey, select) { ui.locationSource[locationKey] = select.value; render(); },
   // Tocar una TV en la grilla de una fuente: la ASIGNA a esta fuente — NO
   // es un interruptor de encendido/apagado. Una TV nunca se apaga sola
   // desde acá tocándola de nuevo; solo deja de tener ESTA fuente cuando
   // OTRA fuente la toma (se toca su ícono estando esa otra elegida
-  // arriba). Volver a "Lista de reproducción" sigue existiendo, pero es
-  // una decisión aparte, explícita, desde la ficha de la TV (mantener
-  // presionado → Fuente → Lista de reproducción) — no un toque suelto acá.
-  async assignDeviceToChannel(arg) {
-    const [deviceId, channelId] = arg.split(':');
+  // arriba). Volver a "sin ninguna fuente" no existe desde acá — la más
+  // parecido es asignarle una lista de reproducción como fuente.
+  // arg = "deviceId:channel:ID" o "deviceId:playlist:ID" — el kind decide
+  // qué endpoint llamar; asignar una lista TAMBIÉN apaga cualquier canal
+  // en vivo que tuviera encima (si no, la lista quedaría guardada pero
+  // tapada por el canal, que deviceManifest() prioriza).
+  async assignDeviceToSource(arg) {
+    const [deviceId, kind, sourceId] = arg.split(':');
     const d = remote.devices.find(x => x.id === deviceId);
-    if (d && d.liveChannel === channelId) return; // ya está en esta fuente, nada que hacer
-    await run(setLiveChannel(deviceId, channelId), 'Fuente activada');
+    if (kind === 'channel') {
+      if (d && d.liveChannel === sourceId) return; // ya está en esta fuente, nada que hacer
+      await run(setLiveChannel(deviceId, sourceId), 'Fuente activada');
+    } else {
+      if (d && !d.liveChannel && d.playlist === sourceId) return; // ya está mostrando esta lista
+      await run(Promise.all([assignPlaylist(deviceId, sourceId), d && d.liveChannel ? setLiveChannel(deviceId, null) : null].filter(Boolean)), 'Fuente activada');
+    }
   },
   // Mezclar desde la vista de fuente: sin una TV puntual seleccionada (acá
   // se trabaja por fuente, no por TV), se abre el editor sobre la PRIMERA
@@ -839,25 +850,33 @@ function viewLocationDetail() {
   // Un canal sin ubicación asignada (!c.location) está disponible para
   // CUALQUIER TV, no solo las de una ubicación puntual — mismo filtro que
   // ya usa el selector de Fuente de la ficha individual (ver deviceSheet).
-  // Sin este "!c.location ||", los canales de uso general (el caso normal
-  // hoy) no aparecían en este selector — bug reportado.
   const chans = (remote.channels || []).filter(c => !c.location || c.location === loc.id);
+  // Las listas de reproducción NO son de una ubicación (se pueden usar en
+  // cualquier TV) — todas cuentan como fuente posible acá también. Una
+  // "fuente" ya no es solo "señal en vivo": es cualquier cosa que un TV
+  // pueda estar mostrando, y el selector tiene que reflejar eso completo.
+  const sourceOptions = [
+    ...chans.map(c => ({ value: `channel:${c.id}`, kind: 'channel', id: c.id, label: `🔴 ${esc(c.name)}` })),
+    ...remote.playlists.map(p => ({ value: `playlist:${p.id}`, kind: 'playlist', id: p.id, label: `▶ ${esc(p.name)}` })),
+  ];
   // "Sin ubicación" no tiene id real — se guarda bajo una llave de texto
   // fija en vez de "null" (las claves de un objeto JS siempre son string,
   // "null" se prestaría a confusión leyendo el código).
   const locationKey = loc.id === null ? 'unassigned' : loc.id;
   // NUNCA en blanco: si todavía no se eligió nada para esta ubicación (o
-  // lo que se había elegido ya no existe/no aplica acá), cae al primer
-  // canal disponible — el selector solo queda vacío si de plano no hay
-  // ningún canal (chans.length===0), caso aparte más abajo.
-  const selChan = chans.find(c => c.id === ui.locationSourceChannel[locationKey]) || chans[0] || null;
-  const activeCount = selChan ? devices.filter(d => d.liveChannel === selChan.id).length : 0;
+  // lo que se había elegido ya no existe/no aplica acá), cae a la primera
+  // fuente disponible — el selector solo queda vacío si de plano no hay
+  // NINGÚN canal ni lista (sourceOptions.length===0), caso aparte abajo.
+  const selected = sourceOptions.find(o => o.value === ui.locationSource[locationKey]) || sourceOptions[0] || null;
+  // "Activa" para un canal = esta TV lo tiene prendido. Para una lista =
+  // esta TV la está mostrando DE VERDAD (sin un canal encima tapándola).
+  const activeCount = !selected ? 0 : devices.filter(d => selected.kind === 'channel' ? d.liveChannel === selected.id : (!d.liveChannel && d.playlist === selected.id)).length;
   return `<div class="screen">
     <div class="topbar"><div class="back" ${A('goTab', 'home')}>‹</div><div class="title">${esc(loc.name)}</div></div>
     <div class="content">
-      ${locationSourceBlock(locationKey, chans, selChan, activeCount)}
+      ${locationSourceBlock(locationKey, sourceOptions, selected, activeCount)}
       <div class="eyebrow">TVs${devices.length ? ' · ' + devices.length : ''}</div>
-      ${devices.length === 0 ? emptyState('Sin TVs aquí todavía', 'Empareja una TV y elige esta ubicación, o mueve una existente desde su detalle.') : `<div class="grid-4" style="margin-bottom:20px">${devices.map(d => deviceTile(d, selChan ? selChan.id : null)).join('')}</div>`}
+      ${devices.length === 0 ? emptyState('Sin TVs aquí todavía', 'Empareja una TV y elige esta ubicación, o mueve una existente desde su detalle.') : `<div class="grid-4" style="margin-bottom:20px">${devices.map(d => deviceTile(d, selected)).join('')}</div>`}
     </div>
     ${ui.detailDeviceId ? deviceSheet() : ''}
     ${ui.ptzCameraDraft ? ptzCameraEditor(ui.ptzCameraDraft) : ''}
@@ -865,31 +884,50 @@ function viewLocationDetail() {
   </div>`;
 }
 
-// Selector de fuente de la ubicación (arriba de la grilla de TVs). NUNCA
-// queda en blanco — siempre hay un canal elegido mientras exista al menos
-// uno (ver selChan en viewLocationDetail). Elegir un canal acá solo
-// cambia el preview grande y qué TVs se resaltan abajo; para de verdad
-// asignárselo a una TV hay que tocarla en la grilla. "Mezclar" actúa
-// sobre la(s) TV(s) que ya tienen esta fuente activa (ver
-// openMixForChannel) — deshabilitado visualmente si ninguna la tiene.
-function locationSourceBlock(locationKey, chans, selChan, activeCount) {
+// Selector de fuente de la ubicación (arriba de la grilla de TVs) — una
+// fuente ahora es un canal en vivo O una lista de reproducción, lo que
+// sea que ya se haya armado en Contenido/Listas. NUNCA queda en blanco —
+// siempre hay algo elegido mientras exista al menos una opción (ver
+// selected en viewLocationDetail). Elegir acá solo cambia el preview
+// grande y qué TVs se resaltan abajo; para de verdad asignársela a una TV
+// hay que tocarla en la grilla. "Mezclar" solo aplica a canales en vivo
+// (el mix necesita señal en vivo real) — se oculta con una lista elegida.
+function locationSourceBlock(locationKey, sourceOptions, selected, activeCount) {
   const box = 'width:100%;aspect-ratio:16/9;border-radius:6px;overflow:hidden;background:repeating-linear-gradient(135deg,#242830 0 7px,#1c1f25 7px 14px);display:flex;align-items:center;justify-content:center;margin-bottom:14px;position:relative';
   return `<div class="eyebrow">Fuente</div>
-  <div style="${box}">
-    ${selChan
-      ? `<video autoplay muted playsinline data-webrtc-offer="/api/channels/${esc(selChan.id)}/webrtc-offer" data-mp4-src="${channelLiveFeedUrl(selChan.id)}" data-snapshot-src="${channelLiveFeedUrl(selChan.id, 'snapshot')}" style="position:absolute;inset:0;width:100%;height:100%;object-fit:cover"></video>
-         <div class="badge-live" style="position:absolute;top:10px;left:10px"><div class="dot dot-sm" style="background:var(--red)"></div><span>EN DIRECTO</span></div>`
-      : `<span style="font:500 10px var(--mono);color:var(--ink-faint)">sin canales todavía</span>`}
-  </div>
-  ${chans.length === 0 ? `<div class="row card-flat row-tap" style="padding:11px 14px;opacity:.6;margin-bottom:16px" ${A('goTab', 'content')}>
-    <div style="flex:1;min-width:0"><div style="font:600 12.5px var(--sans);margin-bottom:2px">Sin canales todavía</div><div style="font:400 10.5px var(--mono);color:var(--ink-dimmer)">configúralos en Contenido → Canales</div></div>
+  <div style="${box}">${sourcePreviewHtml(selected)}</div>
+  ${sourceOptions.length === 0 ? `<div class="row card-flat row-tap" style="padding:11px 14px;opacity:.6;margin-bottom:16px" ${A('goTab', 'content')}>
+    <div style="flex:1;min-width:0"><div style="font:600 12.5px var(--sans);margin-bottom:2px">Sin fuentes todavía</div><div style="font:400 10.5px var(--mono);color:var(--ink-dimmer)">crea un canal en Contenido, o una lista en Listas</div></div>
   </div>` : `<div class="row" style="gap:8px;margin-bottom:6px">
     <select data-change="setLocationSourcePreview" data-arg="${esc(locationKey)}" style="flex:1;min-width:0;padding:11px;border-radius:6px;background:var(--card-2);border:1.5px solid var(--accent);color:var(--ink)">
-      ${chans.map(c => `<option value="${esc(c.id)}" ${selChan.id === c.id ? 'selected' : ''}>🔴 ${esc(c.name)}</option>`).join('')}
+      ${sourceOptions.filter(o => o.kind === 'channel').length ? `<optgroup label="Canales en vivo">${sourceOptions.filter(o => o.kind === 'channel').map(o => `<option value="${esc(o.value)}" ${selected.value === o.value ? 'selected' : ''}>${o.label}</option>`).join('')}</optgroup>` : ''}
+      ${sourceOptions.filter(o => o.kind === 'playlist').length ? `<optgroup label="Listas de reproducción">${sourceOptions.filter(o => o.kind === 'playlist').map(o => `<option value="${esc(o.value)}" ${selected.value === o.value ? 'selected' : ''}>${o.label}</option>`).join('')}</optgroup>` : ''}
     </select>
-    <div class="row-tap" style="flex:none;padding:11px 16px;border-radius:6px;background:${activeCount ? 'rgba(47,123,246,.12)' : 'var(--card-2)'};border:1px solid ${activeCount ? 'var(--accent)' : 'var(--line)'};font:600 12px var(--sans)" ${A('openMixForChannel', selChan.id)}>🎛️ Mezclar</div>
+    ${selected.kind === 'channel' ? `<div class="row-tap" style="flex:none;padding:11px 16px;border-radius:6px;background:${activeCount ? 'rgba(47,123,246,.12)' : 'var(--card-2)'};border:1px solid ${activeCount ? 'var(--accent)' : 'var(--line)'};font:600 12px var(--sans)" ${A('openMixForChannel', selected.id)}>🎛️ Mezclar</div>` : ''}
   </div>
   <div style="font:400 10.5px var(--mono);color:var(--ink-dimmer);margin:0 0 16px">Toca una TV abajo para asignarle esta fuente · ${activeCount} activa${activeCount === 1 ? '' : 's'}</div>`}`;
+}
+// Vista previa del recuadro grande: video en vivo para un canal, primer
+// archivo de la lista para una lista (mismo patrón que bigPreview(), pero
+// sin depender de un TV puntual — acá se previsualiza la FUENTE sola).
+function sourcePreviewHtml(selected) {
+  if (!selected) return `<span style="font:500 10px var(--mono);color:var(--ink-faint)">sin fuentes todavía</span>`;
+  if (selected.kind === 'channel') return `<video autoplay muted playsinline data-webrtc-offer="/api/channels/${esc(selected.id)}/webrtc-offer" data-mp4-src="${channelLiveFeedUrl(selected.id)}" data-snapshot-src="${channelLiveFeedUrl(selected.id, 'snapshot')}" style="position:absolute;inset:0;width:100%;height:100%;object-fit:cover"></video>
+    <div class="badge-live" style="position:absolute;top:10px;left:10px"><div class="dot dot-sm" style="background:var(--red)"></div><span>EN DIRECTO</span></div>`;
+  const p = remote.playlists.find(pl => pl.id === selected.id);
+  const firstItem = p && p.items[0];
+  if (!firstItem) return `<span style="font:500 10px var(--mono);color:var(--ink-faint)">lista vacía</span>`;
+  if (firstItem.channel) {
+    const c = remote.channels.find(x => x.id === firstItem.channel);
+    if (!c) return `<span style="font:500 10px var(--mono);color:var(--ink-faint)">canal no disponible</span>`;
+    return `<video autoplay muted playsinline data-webrtc-offer="/api/channels/${esc(c.id)}/webrtc-offer" data-mp4-src="${channelLiveFeedUrl(c.id)}" data-snapshot-src="${channelLiveFeedUrl(c.id, 'snapshot')}" style="position:absolute;inset:0;width:100%;height:100%;object-fit:cover"></video>
+      <div class="badge-live" style="position:absolute;top:10px;left:10px"><div class="dot dot-sm" style="background:var(--red)"></div><span>EN DIRECTO</span></div>`;
+  }
+  const a = remote.assets.find(x => x.id === firstItem.asset);
+  if (!a) return `<span style="font:500 10px var(--mono);color:var(--ink-faint)">sin contenido</span>`;
+  return a.type.startsWith('image/')
+    ? `<img src="${assetMediaUrl(a.id)}" style="position:absolute;inset:0;width:100%;height:100%;object-fit:cover">`
+    : `<video src="${assetMediaUrl(a.id)}#t=0.5" muted playsinline preload="metadata" style="position:absolute;inset:0;width:100%;height:100%;object-fit:cover"></video>`;
 }
 
 function ptzCameraEditor(d) {
@@ -992,20 +1030,20 @@ function viewPtz() {
 
 // Tarjeta compacta de TV para la grilla de 4 — mismo previewThumb() de
 // siempre, solo que más chica. El toque corto ASIGNA la fuente elegida
-// arriba a esta TV (nunca la apaga — ver assignDeviceToChannel); abrir su
+// arriba a esta TV (nunca la apaga — ver assignDeviceToSource); abrir su
 // ficha completa (nombre, ubicación, orientación...) es SIEMPRE con
 // mantener presionado, sin excepción — así el toque nunca es ambiguo.
-// selectedChannelId solo puede venir null si de plano no hay ningún canal
-// en esta ubicación (caso aparte en locationSourceBlock); ahí el toque
-// corto cae de vuelta a abrir la ficha, ya que no hay nada que asignar.
-function deviceTile(d, selectedChannelId) {
+// "selected" solo puede venir null si de plano no hay NINGUNA fuente
+// (ni canal ni lista) en esta ubicación; ahí el toque corto cae de vuelta
+// a abrir la ficha, ya que no hay nada que asignar.
+function deviceTile(d, selected) {
   const status = deviceStatus(d);
   const playlist = remote.playlists.find(p => p.id === d.playlist);
   const firstItem = playlist && playlist.items[0];
   const firstChannel = firstItem && firstItem.channel ? remote.channels.find(c => c.id === firstItem.channel) : null;
   const firstAsset = firstItem && !firstItem.channel ? remote.assets.find(a => a.id === firstItem.asset) : null;
-  const active = selectedChannelId && d.liveChannel === selectedChannelId;
-  const tapAttrs = selectedChannelId ? A('assignDeviceToChannel', `${d.id}:${selectedChannelId}`) : A('openDevice', d.id);
+  const active = selected && (selected.kind === 'channel' ? d.liveChannel === selected.id : (!d.liveChannel && d.playlist === selected.id));
+  const tapAttrs = selected ? A('assignDeviceToSource', `${d.id}:${selected.kind}:${selected.id}`) : A('openDevice', d.id);
   return `<div class="card row-tap" style="overflow:hidden;position:relative;${active ? 'box-shadow:0 0 0 2px var(--amber)' : ''}" ${tapAttrs} data-longpress="openDevice" data-longpress-arg="${esc(d.id)}">
     ${d.alert ? `<div title="${esc(d.alert.text)}" style="position:absolute;top:4px;right:4px;z-index:1;font-size:11px;line-height:1;filter:drop-shadow(0 1px 2px rgba(0,0,0,.5))">🚨</div>` : ''}
     ${previewThumb(d, firstAsset, firstChannel)}
