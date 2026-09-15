@@ -866,7 +866,7 @@ function viewLocationDetail() {
   // "fuente" ya no es solo "señal en vivo": es cualquier cosa que un TV
   // pueda estar mostrando, y el selector tiene que reflejar eso completo.
   const sourceOptions = [
-    ...chans.map(c => ({ value: `channel:${c.id}`, kind: 'channel', id: c.id, label: `🔴 ${esc(c.name)}` })),
+    ...chans.map(c => ({ value: `channel:${c.id}`, kind: 'channel', id: c.id, label: esc(c.name) })),
     ...remote.playlists.map(p => ({ value: `playlist:${p.id}`, kind: 'playlist', id: p.id, label: `▶ ${esc(p.name)}` })),
   ];
   // "Sin ubicación" no tiene id real — se guarda bajo una llave de texto
@@ -904,7 +904,10 @@ function viewLocationDetail() {
 // (el mix necesita señal en vivo real) — se oculta con una lista elegida.
 function locationSourceBlock(locationKey, sourceOptions, selected, activeCount) {
   const box = 'width:100%;aspect-ratio:16/9;border-radius:6px;overflow:hidden;background:repeating-linear-gradient(135deg,#242830 0 7px,#1c1f25 7px 14px);display:flex;align-items:center;justify-content:center;margin-bottom:14px;position:relative';
-  return `<div class="eyebrow">Fuente</div>
+  return `<div class="row" style="gap:8px;align-items:center;margin-bottom:8px">
+    <div class="eyebrow" style="margin:0">Fuente</div>
+    ${selected && selected.kind === 'channel' ? `<div class="badge-live" style="position:static"><div class="dot dot-sm" style="background:var(--red)"></div><span>EN DIRECTO</span></div>` : ''}
+  </div>
   <div style="${box}">${sourcePreviewHtml(selected)}</div>
   ${sourceOptions.length === 0 ? `<div class="row card-flat row-tap" style="padding:11px 14px;opacity:.6;margin-bottom:16px" ${A('goTab', 'content')}>
     <div style="flex:1;min-width:0"><div style="font:600 12.5px var(--sans);margin-bottom:2px">Sin fuentes todavía</div><div style="font:400 10.5px var(--mono);color:var(--ink-dimmer)">crea un canal en Contenido, o una lista en Listas</div></div>
@@ -922,16 +925,14 @@ function locationSourceBlock(locationKey, sourceOptions, selected, activeCount) 
 // sin depender de un TV puntual — acá se previsualiza la FUENTE sola).
 function sourcePreviewHtml(selected) {
   if (!selected) return `<span style="font:500 10px var(--mono);color:var(--ink-faint)">sin fuentes todavía</span>`;
-  if (selected.kind === 'channel') return `<video autoplay muted playsinline data-webrtc-offer="/api/channels/${esc(selected.id)}/webrtc-offer" data-mp4-src="${channelLiveFeedUrl(selected.id)}" data-snapshot-src="${channelLiveFeedUrl(selected.id, 'snapshot')}" style="position:absolute;inset:0;width:100%;height:100%;object-fit:cover"></video>
-    <div class="badge-live" style="position:absolute;top:10px;left:10px"><div class="dot dot-sm" style="background:var(--red)"></div><span>EN DIRECTO</span></div>`;
+  if (selected.kind === 'channel') return `<video autoplay muted playsinline data-webrtc-offer="/api/channels/${esc(selected.id)}/webrtc-offer" data-mp4-src="${channelLiveFeedUrl(selected.id)}" data-snapshot-src="${channelLiveFeedUrl(selected.id, 'snapshot')}" style="position:absolute;inset:0;width:100%;height:100%;object-fit:cover"></video>`;
   const p = remote.playlists.find(pl => pl.id === selected.id);
   const firstItem = p && p.items[0];
   if (!firstItem) return `<span style="font:500 10px var(--mono);color:var(--ink-faint)">lista vacía</span>`;
   if (firstItem.channel) {
     const c = remote.channels.find(x => x.id === firstItem.channel);
     if (!c) return `<span style="font:500 10px var(--mono);color:var(--ink-faint)">canal no disponible</span>`;
-    return `<video autoplay muted playsinline data-webrtc-offer="/api/channels/${esc(c.id)}/webrtc-offer" data-mp4-src="${channelLiveFeedUrl(c.id)}" data-snapshot-src="${channelLiveFeedUrl(c.id, 'snapshot')}" style="position:absolute;inset:0;width:100%;height:100%;object-fit:cover"></video>
-      <div class="badge-live" style="position:absolute;top:10px;left:10px"><div class="dot dot-sm" style="background:var(--red)"></div><span>EN DIRECTO</span></div>`;
+    return `<video autoplay muted playsinline data-webrtc-offer="/api/channels/${esc(c.id)}/webrtc-offer" data-mp4-src="${channelLiveFeedUrl(c.id)}" data-snapshot-src="${channelLiveFeedUrl(c.id, 'snapshot')}" style="position:absolute;inset:0;width:100%;height:100%;object-fit:cover"></video>`;
   }
   const a = remote.assets.find(x => x.id === firstItem.asset);
   if (!a) return `<span style="font:500 10px var(--mono);color:var(--ink-faint)">sin contenido</span>`;
@@ -1364,7 +1365,7 @@ function deviceSheet() {
       <div class="row" style="gap:8px;margin-bottom:${d.liveSource ? '10px' : '16px'}">
         <select data-change="setDeviceSource" data-arg="${esc(d.id)}" style="flex:1;min-width:0;padding:11px;border-radius:6px;background:var(--card-2);border:1.5px solid ${d.liveChannel ? 'var(--accent)' : 'var(--line)'};color:var(--ink)">
           <option value="" ${!d.liveChannel ? 'selected' : ''}>▶ Lista de reproducción${playlist ? ' — ' + esc(playlist.name) : ''}</option>
-          ${chans.map(c => `<option value="${esc(c.id)}" ${d.liveChannel === c.id ? 'selected' : ''}>🔴 ${esc(c.name)}</option>`).join('')}
+          ${chans.map(c => `<option value="${esc(c.id)}" ${d.liveChannel === c.id ? 'selected' : ''}>${esc(c.name)}</option>`).join('')}
         </select>
         ${d.liveSource ? `<div class="row-tap" style="padding:7px 14px;border-radius:6px;flex:none;background:${d.mix ? 'rgba(47,123,246,.12)' : 'var(--card-2)'};border:1px solid ${d.mix ? 'var(--accent)' : 'var(--line)'};font:600 12px var(--sans)" ${A('openMix', d.id)}>🎛️ Mezclar</div>` : ''}
         <div class="row-tap" style="padding:7px 14px;border-radius:6px;flex:none;background:${d.alert ? 'rgba(242,99,90,.14)' : 'var(--card-2)'};border:1px solid ${d.alert ? 'var(--red)' : 'var(--line)'};font:600 12px var(--sans)" ${A('sendAlertNow', d.id)}>🚨 Alerta</div>
@@ -1681,7 +1682,7 @@ function playlistEditor(d) {
         const a = it.channel ? null : remote.assets.find(a => a.id === it.asset);
         const label = c ? c.name : (a ? a.name : (it.channel || it.asset));
         return `<div class="row card-flat" style="padding:9px 12px">
-          <div style="flex:1;min-width:0;font:500 12px var(--sans);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${c ? '🔴 ' : ''}${esc(label)}</div>
+          <div style="flex:1;min-width:0;font:500 12px var(--sans);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(label)}</div>
           <input type="number" min="1" value="${it.seconds}" data-change="setDraftSeconds" data-arg="${idx}" style="width:56px;padding:6px;border-radius:6px;background:var(--card);border:1px solid var(--line);color:var(--ink);text-align:center">
           <span style="font:400 10px var(--mono);color:var(--ink-dimmer)">seg</span>
           <div class="row-tap" style="color:var(--red);font:600 14px var(--sans)" ${A('removeDraftItem', idx)}>×</div>
@@ -1690,7 +1691,7 @@ function playlistEditor(d) {
     </div>
     <select data-change="addDraftItem" style="width:100%;padding:11px;border-radius:6px;background:var(--card-2);border:1px solid var(--line);color:var(--ink);margin-bottom:14px">
       <option value="">+ Agregar archivo o canal…</option>
-      ${(remote.channels || []).length ? `<optgroup label="Canales en vivo">${remote.channels.map(c => `<option value="channel:${esc(c.id)}">🔴 ${esc(c.name)}</option>`).join('')}</optgroup>` : ''}
+      ${(remote.channels || []).length ? `<optgroup label="Canales en vivo">${remote.channels.map(c => `<option value="channel:${esc(c.id)}">${esc(c.name)}</option>`).join('')}</optgroup>` : ''}
       ${remote.assets.length ? `<optgroup label="Archivos">${remote.assets.map(a => `<option value="asset:${esc(a.id)}">${esc(a.name)}</option>`).join('')}</optgroup>` : ''}
     </select>
     <div class="btn btn-primary" ${A('savePlaylistDraft')}>Guardar lista</div>
