@@ -99,6 +99,30 @@ test('Mezcla sobre la señal en vivo: requiere live_source, valida assets, plant
     assert.equal((await req('/api/mix-templates', { cookie: b })).data.length, 0);
     assert.equal((await req('/api/mix-templates', { cookie: b, body: { name: 'Ajena', layout: 'lower', promo: null, logo: logoId, text: '', muted: false } })).status, 400);
 
+    // PATCH — plantilla aparte (no la que se usa más abajo en apply-all, para
+    // no pisarle los valores que esas aserciones esperan).
+    const tpl2 = await req('/api/mix-templates', { cookie: a, body: { name: 'Otra', layout: 'split', promo: null, logo: logoId, text: 'Original', muted: false, style: { stripeColor: '#00ff00', fontSize: 20 } } });
+    // Solo con {name} (editor de "solo renombrar"): renombra sin tocar estilo
+    assert.equal((await req(`/api/mix-templates/${tpl2.data.id}`, { cookie: a, method: 'PATCH', body: { name: 'Otra (renombrada)' } })).status, 200);
+    let afterRename = (await req('/api/mix-templates', { cookie: a })).data.find(t => t.id === tpl2.data.id);
+    assert.equal(afterRename.name, 'Otra (renombrada)');
+    assert.deepEqual(afterRename.style, { stripeColor: '#00ff00', textColor: '#ffffff', fontSize: 20, thickness: 64, fadeMs: 400 });
+    // Con layout presente (guardar la plantilla cargada en el Mezclador):
+    // refresca TODO, incluido color y tamaño de letra — antes esto no existía
+    // y ajustar esos atributos en el editor nunca se guardaba en la plantilla.
+    const patched = await req(`/api/mix-templates/${tpl2.data.id}`, { cookie: a, method: 'PATCH', body: { name: 'Otra', layout: 'full', promo: null, logo: null, text: 'Nuevo texto', muted: true, style: { stripeColor: '#ff00ff', fontSize: 32 } } });
+    assert.equal(patched.status, 200);
+    const afterPatch = (await req('/api/mix-templates', { cookie: a })).data.find(t => t.id === tpl2.data.id);
+    assert.equal(afterPatch.name, 'Otra');
+    assert.equal(afterPatch.layout, 'full');
+    assert.equal(afterPatch.logo, null);
+    assert.equal(afterPatch.text, 'Nuevo texto');
+    assert.equal(afterPatch.muted, true);
+    assert.deepEqual(afterPatch.style, { stripeColor: '#ff00ff', textColor: '#ffffff', fontSize: 32, thickness: 64, fadeMs: 400 });
+    assert.equal((await req(`/api/mix-templates/${tpl2.data.id}`, { cookie: b, method: 'PATCH', body: { name: 'x' } })).status, 404); // otro tenant
+    assert.equal((await req(`/api/mix-templates/${tpl2.data.id}`, { cookie: a, method: 'PATCH', body: { name: 'x', layout: 'not-a-layout' } })).status, 400);
+    assert.equal((await req(`/api/mix-templates/${tpl2.data.id}`, { cookie: a, method: 'DELETE' })).status, 200);
+
     // "Marca consistente en cada pantalla" — aplicar a muchas de un toque
     await req(`/api/devices/${deviceId}/live-source`, { cookie: a, body: { url: 'http://192.168.1.10:1984/stream.html?src=mivideo' } });
     const loc = (await req('/api/locations', { cookie: a, body: { name: 'Sucursal 2' } })).data;

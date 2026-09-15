@@ -311,16 +311,31 @@ export function createApp(env = process.env, studioOptions = {}) {
  // ---- Plantillas de mezcla — guardan una combinación (layout+texto+logo+promo+estilo)
  // para reusarla en cualquier pantalla, sin rehacerla cada vez.
  app.get('/api/mix-templates',admin,(req,res)=>res.json(db.prepare('SELECT * FROM mix_templates WHERE tenant=? ORDER BY name').all(req.user.tenant).map(t=>({...t,muted:!!t.muted,style:styleOf(t.style?JSON.parse(t.style):null)}))));
- app.post('/api/mix-templates',admin,wrap(managed('mixTemplate.create',async(req,res)=>{
-  const b=req.body;
+ // Valida layout/promo/logo/text/style para crear O refrescar una plantilla
+ // — lo comparten el POST (crear) y el PATCH (cuando llega con layout, ver
+ // más abajo) para no duplicar las mismas reglas dos veces.
+ const mixTemplateFields=(b,req)=>{
   if(!MIX_LAYOUTS.includes(b.layout))throw fail(400,'Elige un formato de mezcla válido.');
   const asset=(v,label)=>{if(v===null||v===undefined)return null;if(typeof v!=='string'||!db.prepare('SELECT 1 FROM assets WHERE id=? AND tenant=? AND archived=0').get(v,req.user.tenant))throw fail(400,`Elige ${label} de tu biblioteca.`);return v;};
+  return {layout:b.layout,promo:asset(b.promo,'un contenido'),logo:asset(b.logo,'un logo'),text:typeof b.text==='string'?b.text.trim().slice(0,140):'',muted:b.muted?1:0,style:JSON.stringify(styleOf(b.style))};
+ };
+ app.post('/api/mix-templates',admin,wrap(managed('mixTemplate.create',async(req,res)=>{
+  const b=req.body,f=mixTemplateFields(b,req);
   const id=randomUUID();
-  db.prepare('INSERT INTO mix_templates (id,tenant,name,layout,promo,logo,text,muted,style) VALUES (?,?,?,?,?,?,?,?,?)').run(id,req.user.tenant,nameOf(b.name),b.layout,asset(b.promo,'un contenido'),asset(b.logo,'un logo'),typeof b.text==='string'?b.text.trim().slice(0,140):'',b.muted?1:0,JSON.stringify(styleOf(b.style)));
+  db.prepare('INSERT INTO mix_templates (id,tenant,name,layout,promo,logo,text,muted,style) VALUES (?,?,?,?,?,?,?,?,?)').run(id,req.user.tenant,nameOf(b.name),f.layout,f.promo,f.logo,f.text,f.muted,f.style);
   res.status(201).json({id});
  })));
+ // El editor de "solo renombrar" (mixTemplateEditor en app.js) manda
+ // solamente {name} — pero guardar la plantilla que está cargada en el
+ // Mezclador manda TODO (mismo payload que crear), para refrescar color y
+ // tamaño de letra con lo que se esté viendo ahí (ver saveMixTemplateDraft).
+ // b.layout presente es lo que distingue un caso del otro.
  app.patch('/api/mix-templates/:id',admin,wrap(managed('mixTemplate.update',async(req,res)=>{
-  if(!db.prepare('UPDATE mix_templates SET name=? WHERE id=? AND tenant=?').run(nameOf(req.body.name),req.params.id,req.user.tenant).changes)throw fail(404,'Plantilla no encontrada.');
+  const b=req.body;
+  const changes=b.layout!==undefined
+   ?(()=>{const f=mixTemplateFields(b,req);return db.prepare('UPDATE mix_templates SET name=?,layout=?,promo=?,logo=?,text=?,muted=?,style=? WHERE id=? AND tenant=?').run(nameOf(b.name),f.layout,f.promo,f.logo,f.text,f.muted,f.style,req.params.id,req.user.tenant).changes;})()
+   :db.prepare('UPDATE mix_templates SET name=? WHERE id=? AND tenant=?').run(nameOf(b.name),req.params.id,req.user.tenant).changes;
+  if(!changes)throw fail(404,'Plantilla no encontrada.');
   res.json({ok:true});
  })));
  app.delete('/api/mix-templates/:id',admin,wrap(managed('mixTemplate.delete',async(req,res)=>{

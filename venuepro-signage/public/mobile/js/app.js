@@ -5,7 +5,7 @@
 // Se sube a mano en cada cambio de este archivo — se muestra en Ajustes
 // (viewSettings()) para poder confirmar de un vistazo si el celular ya
 // está corriendo el JS nuevo o todavía sirve una copia vieja de caché.
-const BUILD = '2026-09-15.7';
+const BUILD = '2026-09-15.8';
 
 // El QR de una TV sin emparejar ahora es una URL http(s) de verdad
 // (?pair=CODE, ver /api/pair/start en server.js) — para que la cámara
@@ -59,6 +59,13 @@ const ui = {
                         // confirmación real de la cámara (no hay agente local)
   mixDeviceId: null,  // pantalla abierta en viewMix
   mixDraft: null,      // { layout, promo, logo, text, muted } — se guarda con saveMixNow()
+  // Id de la plantilla actualmente CARGADA en mixDraft (ver
+  // actions.applyMixTemplate) — null si el draft arrancó desde el mix real
+  // de la TV o en blanco. Al guardar esa MISMA plantilla desde el editor
+  // (✏️), refresca sus atributos (color/tamaño/etc.) con los de mixDraft en
+  // vez de solo renombrarla — así "cargar plantilla, ajustar, guardar" de
+  // verdad actualiza la plantilla (antes ✏️ solo podía cambiar el nombre).
+  mixTemplateLoadedId: null,
   // Editores tipo sheet — mismo patrón que playlistDraft/scheduleDraft:
   // {id:null,...} = creando nuevo, {id,...} = editando uno existente. Con
   // id, el editor muestra un 🗑️ para eliminar — así ninguna lista de
@@ -482,6 +489,7 @@ const actions = {
     if (!d || !d.liveSource) return showToast('Activa una señal en vivo primero', true);
     ui.mixDeviceId = id;
     ui.mixDraft = newMixDraft(d.mix);
+    ui.mixTemplateLoadedId = null;
     ui.detailDeviceId = null; ui.route = 'mix'; render();
   },
   backFromMix() {
@@ -514,15 +522,21 @@ const actions = {
   async clearMixNow() {
     if (!confirm('¿Quitar la mezcla de esta TV?')) return;
     ui.mixDraft = newMixDraft();
+    ui.mixTemplateLoadedId = null;
     await run(clearMix(ui.mixDeviceId), 'Mezcla quitada');
   },
   async saveMixTemplateNow() {
     const name = prompt('Nombre de la plantilla (ej. Happy Hour):'); if (!name) return;
     await run(createMixTemplate({ name, ...mixDraftPayload(ui.mixDraft) }), 'Plantilla guardada');
   },
+  // Cargar una plantilla la deja EDITABLE en el micro-editor (colores,
+  // tamaño, etc.) — mixTemplateLoadedId recuerda cuál, para que si después
+  // se guarda desde ahí (✏️ → Guardar) se refresquen sus atributos en vez
+  // de solo renombrarla (ver saveMixTemplateDraft).
   applyMixTemplate(id) {
     const t = (remote.mixTemplates || []).find(t => t.id === id); if (!t) return;
     ui.mixDraft = newMixDraft({ layout: t.layout, promo: t.promo, logo: t.logo, text: t.text, muted: !!t.muted, ...(t.style || {}) });
+    ui.mixTemplateLoadedId = id;
     render();
   },
   editMixTemplateNow(id) {
@@ -534,7 +548,16 @@ const actions = {
     const name = form.name.value.trim(); if (!name) return;
     const id = ui.mixTemplateDraft.id;
     ui.mixTemplateDraft = null;
-    await run(renameMixTemplate(id, name), 'Plantilla actualizada');
+    // Si ESTA plantilla es la que está cargada en el micro-editor (se tocó
+    // su fila para cargarla, ver applyMixTemplate), refresca también sus
+    // atributos (color, tamaño de letra, etc.) con lo que se esté viendo
+    // ahí — antes esto solo renombraba, así que ajustar color/tamaño y
+    // guardar nunca se reflejaba en la plantilla guardada.
+    if (ui.mixTemplateLoadedId === id) {
+      await run(updateMixTemplate(id, { name, ...mixDraftPayload(ui.mixDraft) }), 'Plantilla actualizada');
+    } else {
+      await run(renameMixTemplate(id, name), 'Plantilla actualizada');
+    }
   },
   async deleteMixTemplateFromEditor() {
     if (!confirm('¿Eliminar esta plantilla?')) return;
@@ -1384,6 +1407,7 @@ function viewMix() {
 }
 
 function mixTemplateEditor(d) {
+  const willRefreshAttrs = ui.mixTemplateLoadedId === d.id;
   return `<div class="backdrop" ${A('cancelMixTemplate')}></div>
   <div class="sheet${sheetEntering ? ' entering' : ''}">
     <div class="sheet-grip"></div>
@@ -1391,6 +1415,7 @@ function mixTemplateEditor(d) {
       <div style="font:700 18px var(--sans);flex:1;min-width:0">Editar plantilla</div>
       <div class="row-tap" title="Cerrar" style="width:30px;height:30px;border-radius:6px;flex:none;display:flex;align-items:center;justify-content:center;background:var(--card-2);font:600 14px var(--sans)" ${A('cancelMixTemplate')}>✕</div>
     </div>
+    ${willRefreshAttrs ? `<div style="font:400 10.5px var(--mono);color:var(--ink-dimmer);margin-bottom:14px">Esta plantilla está cargada arriba — guardar también actualiza color, tamaño de letra y demás con lo que se ve ahora.</div>` : ''}
     <form data-submit="saveMixTemplateDraft">
       <div class="stack">
         <input name="name" required value="${esc(d.name)}" placeholder="Nombre de la plantilla" style="padding:11px 13px;border-radius:6px;background:var(--card-2);border:1px solid var(--line);color:var(--ink)">

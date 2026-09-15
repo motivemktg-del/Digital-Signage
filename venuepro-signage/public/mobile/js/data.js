@@ -66,6 +66,13 @@ function clearAllAlerts(location) { return api('/api/alerts/clear-all', { method
 function listMixTemplates() { return api('/api/mix-templates'); }
 function createMixTemplate(payload) { return api('/api/mix-templates', { method: 'POST', body: payload }); } // {name,layout,promo,logo,text,muted}
 function renameMixTemplate(id, name) { return api(`/api/mix-templates/${id}`, { method: 'PATCH', body: { name } }); }
+// Igual que renameMixTemplate pero mandando también layout/promo/logo/text/
+// muted/style — el PATCH del servidor solo los toca si vienen presentes
+// (layout es el que decide: sin él, es un simple rename). Se usa al guardar
+// la plantilla que está cargada en el editor, para refrescarla con los
+// ajustes de color/tamaño que se estén viendo ahí (ver saveMixTemplateDraft
+// en app.js) — antes "Editar" solo podía renombrar, nunca actualizar estilo.
+function updateMixTemplate(id, payload) { return api(`/api/mix-templates/${id}`, { method: 'PATCH', body: payload }); }
 function deleteMixTemplate(id) { return api(`/api/mix-templates/${id}`, { method: 'DELETE' }); }
 function applyMixTemplateToAll(id, location) { return api(`/api/mix-templates/${id}/apply-all`, { method: 'POST', body: { location } }); } // location:null = todas mis pantallas
 
