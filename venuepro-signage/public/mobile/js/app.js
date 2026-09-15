@@ -5,7 +5,7 @@
 // Se sube a mano en cada cambio de este archivo — se muestra en Ajustes
 // (viewSettings()) para poder confirmar de un vistazo si el celular ya
 // está corriendo el JS nuevo o todavía sirve una copia vieja de caché.
-const BUILD = '2026-09-15.14';
+const BUILD = '2026-09-15.15';
 
 // El QR de una TV sin emparejar ahora es una URL http(s) de verdad
 // (?pair=CODE, ver /api/pair/start en server.js) — para que la cámara
@@ -1189,13 +1189,14 @@ function deviceTile(d, selected) {
   const firstChannel = firstItem && firstItem.channel ? remote.channels.find(c => c.id === firstItem.channel) : null;
   const firstAsset = firstItem && !firstItem.channel ? remote.assets.find(a => a.id === firstItem.asset) : null;
   const active = selected && (selected.kind === 'channel' ? d.liveChannel === selected.id : (!d.liveChannel && d.playlist === selected.id));
-  const mixSelected = active && ui.mixTvSelected === d.id;
+  // mixTvSelected sigue marcando cuál TV usa el botón Mezclar (ver
+  // openMixForChannel) — ya no se pinta con un borde propio (pedido
+  // explícito: quitar esa línea dorada), el morado de abajo alcanza.
   // Morado: esta TV tiene una mezcla activa (una plantilla, o un mix hecho
-  // a mano) — es información aparte de "cuál fuente tiene" (verde) o "está
-  // marcada para elegir mezclar ahora" (amarillo, ver mixTvSelected), así
-  // que se nota aunque no sea la fuente que se esté mirando en este momento.
+  // a mano) — es información aparte de "cuál fuente tiene" (verde), así que
+  // se nota aunque no sea la fuente que se esté mirando en este momento.
   const mixActive = !!d.mix;
-  const borderColor = mixSelected ? 'var(--amber)' : mixActive ? 'var(--purple)' : active ? 'var(--green)' : null;
+  const borderColor = mixActive ? 'var(--purple)' : active ? 'var(--green)' : null;
   const tapAttrs = selected ? A('assignDeviceToSource', `${d.id}:${selected.kind}:${selected.id}`) : A('openDevice', d.id);
   return `<div class="card row-tap" style="overflow:hidden;position:relative;${borderColor ? `box-shadow:0 0 0 2px ${borderColor}` : ''}" ${tapAttrs} data-longpress="openDevice" data-longpress-arg="${esc(d.id)}">
     ${d.alert ? `<div title="${esc(d.alert.text)}" style="position:absolute;top:4px;right:4px;z-index:1;font-size:11px;line-height:1;filter:drop-shadow(0 1px 2px rgba(0,0,0,.5))">🚨</div>` : ''}
