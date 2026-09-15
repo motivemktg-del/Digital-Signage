@@ -2,6 +2,11 @@
 // de venuepro-signage (server.js). Sin framework: render() regenera el
 // HTML de #app; los clics se resuelven por delegación con data-action.
 
+// Se sube a mano en cada cambio de este archivo — se muestra en Ajustes
+// (viewSettings()) para poder confirmar de un vistazo si el celular ya
+// está corriendo el JS nuevo o todavía sirve una copia vieja de caché.
+const BUILD = '2026-09-15.1';
+
 // El QR de una TV sin emparejar ahora es una URL http(s) de verdad
 // (?pair=CODE, ver /api/pair/start en server.js) — para que la cámara
 // NATIVA del celular la reconozca y abra el panel sola, sin depender del
@@ -1075,7 +1080,7 @@ function deviceTile(d, selected) {
   const firstAsset = firstItem && !firstItem.channel ? remote.assets.find(a => a.id === firstItem.asset) : null;
   const active = selected && (selected.kind === 'channel' ? d.liveChannel === selected.id : (!d.liveChannel && d.playlist === selected.id));
   const tapAttrs = selected ? A('assignDeviceToSource', `${d.id}:${selected.kind}:${selected.id}`) : A('openDevice', d.id);
-  return `<div class="card row-tap" style="overflow:hidden;position:relative;${active ? 'box-shadow:0 0 0 2px var(--amber)' : ''}" ${tapAttrs} data-longpress="openDevice" data-longpress-arg="${esc(d.id)}">
+  return `<div class="card row-tap" style="overflow:hidden;position:relative;${active ? 'box-shadow:0 0 0 2px var(--green)' : ''}" ${tapAttrs} data-longpress="openDevice" data-longpress-arg="${esc(d.id)}">
     ${d.alert ? `<div title="${esc(d.alert.text)}" style="position:absolute;top:4px;right:4px;z-index:1;font-size:11px;line-height:1;filter:drop-shadow(0 1px 2px rgba(0,0,0,.5))">🚨</div>` : ''}
     ${d.error ? `<div title="${esc(d.error)}" style="position:absolute;top:4px;left:4px;z-index:1;font-size:11px;line-height:1;filter:drop-shadow(0 1px 2px rgba(0,0,0,.5))">⚠️</div>` : ''}
     ${previewThumb(d, firstAsset, firstChannel)}
@@ -1980,6 +1985,12 @@ function viewSettings() {
         <div style="color:var(--ink-faint);font:400 13px var(--sans)">⬇</div>
       </a>
       <div style="font:400 10px var(--mono);color:var(--ink-dimmer);margin-top:20px;text-align:center">${esc(remote.tenant)} · ${esc(remote.role)}</div>
+      <!-- Marca de build del PROPIO app.js — deliberada: Safari/iOS a veces
+           sigue sirviendo JS viejo desde caché días después de un deploy,
+           sin ningún aviso. Comparar este número contra el último cambio
+           real es la forma más rápida de confirmar si el celular está
+           corriendo el código nuevo o no, sin depender de la consola. -->
+      <div style="font:400 9px var(--mono);color:var(--ink-faint);margin-top:4px;text-align:center;opacity:.6">panel build ${BUILD}</div>
       <div class="row-tap" style="text-align:center;margin-top:14px;font:600 12px var(--sans);color:var(--red)" ${A('logoutNow')}>Cerrar sesión</div>
     </div>
     ${toastHtml()}
