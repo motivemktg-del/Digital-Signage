@@ -109,7 +109,7 @@ public class MainActivity extends Activity {
   assets=new File(getFilesDir(),"media");assets.mkdirs();
   secret=getPreferences(0).getString("secret","");
   try{current=new JSONObject(new String(new AtomicFile(new File(getFilesDir(),"manifest.json")).readFully(),StandardCharsets.UTF_8));version=current.getString("version");liveSource=current.optString("liveSource","");liveSourceRtsp=current.optString("liveSourceRtsp","");liveSourceWebrtc=current.optString("liveSourceWebrtc","");}catch(Exception ignored){}
-  if(!liveSource.isEmpty())playLive(liveSource);else if(current!=null)playNext();else{String saved=getPreferences(0).getString("pairQr","");if(!saved.isEmpty()){try{byte[] bytes=Base64.decode(saved,Base64.DEFAULT);showPair(BitmapFactory.decodeByteArray(bytes,0,bytes.length),getPreferences(0).getString("pairCode",""));}catch(Exception ignored){message("VenuePro Signage\nConectando tu pantalla…");}}else message("VenuePro Signage\nConectando tu pantalla…");}
+  if(!liveSource.isEmpty())playLive(liveSource);else if(current!=null)playNext();else{String saved=getPreferences(0).getString("pairQr","");if(!saved.isEmpty()){try{byte[] bytes=Base64.decode(saved,Base64.DEFAULT);showPair(BitmapFactory.decodeByteArray(bytes,0,bytes.length),getPreferences(0).getString("pairCode",""));}catch(Exception ignored){message("MoTV Signage\nConectando tu pantalla…");}}else message("MoTV Signage\nConectando tu pantalla…");}
   network.execute(this::syncLoop);
  }
  // En vez de un sondeo a intervalo FIJO (antes 20s siempre, cambie algo o
@@ -783,11 +783,21 @@ public class MainActivity extends Activity {
    }catch(Exception ignored){}
   });
  }
- private void message(String text){root.removeAllViews();TextView t=new TextView(this);t.setText(text);t.setTextColor(Color.rgb(177,237,137));t.setTextSize(24);t.setGravity(Gravity.CENTER);t.setPadding(24,24,24,24);root.addView(t,new FrameLayout.LayoutParams(-1,-1));}
- private void showPair(Bitmap qr,String code){if(current!=null)return;root.removeAllViews();LinearLayout box=new LinearLayout(this);box.setOrientation(LinearLayout.VERTICAL);box.setGravity(Gravity.CENTER);root.addView(box,new FrameLayout.LayoutParams(-1,-1));TextView title=new TextView(this);title.setText("VenuePro Signage\nEscanea desde el administrador");title.setTextSize(22);title.setGravity(Gravity.CENTER);title.setTextColor(Color.WHITE);box.addView(title);ImageView image=new ImageView(this);image.setImageBitmap(qr);int size=Math.min(getResources().getDisplayMetrics().widthPixels,getResources().getDisplayMetrics().heightPixels)/2;LinearLayout.LayoutParams lp=new LinearLayout.LayoutParams(size,size);lp.setMargins(0,18,0,18);box.addView(image,lp);TextView label=new TextView(this);label.setText(code+"\nCódigo válido por 10 minutos");label.setTextSize(20);label.setGravity(Gravity.CENTER);label.setTextColor(Color.rgb(177,237,137));box.addView(label);Button setup=new Button(this);setup.setText("Configurar inicio automático");setup.setOnClickListener(v->startupSettings());box.addView(setup);}
+ // Solo se usa en pantallas de "no hay nada que mostrar todavía"
+ // (conectando, sin contenido programado, pausada...) — nunca se pisa
+ // sobre contenido real, así que no molesta poner la versión acá siempre:
+ // deja saber de un vistazo si esta TV ya tiene la APK nueva o no, sin
+ // tener que comparar checksums a mano como se tuvo que hacer antes.
+ private void message(String text){root.removeAllViews();
+  LinearLayout box=new LinearLayout(this);box.setOrientation(LinearLayout.VERTICAL);box.setGravity(Gravity.CENTER);
+  TextView t=new TextView(this);t.setText(text);t.setTextColor(Color.rgb(177,237,137));t.setTextSize(24);t.setGravity(Gravity.CENTER);t.setPadding(24,24,24,24);box.addView(t);
+  TextView v=new TextView(this);v.setText("MoTV Signage v"+BuildConfig.VERSION_NAME);v.setTextColor(Color.rgb(110,120,130));v.setTextSize(11);v.setGravity(Gravity.CENTER);box.addView(v);
+  root.addView(box,new FrameLayout.LayoutParams(-1,-1));
+ }
+ private void showPair(Bitmap qr,String code){if(current!=null)return;root.removeAllViews();LinearLayout box=new LinearLayout(this);box.setOrientation(LinearLayout.VERTICAL);box.setGravity(Gravity.CENTER);root.addView(box,new FrameLayout.LayoutParams(-1,-1));TextView title=new TextView(this);title.setText("MoTV Signage\nEscanea desde el administrador");title.setTextSize(22);title.setGravity(Gravity.CENTER);title.setTextColor(Color.WHITE);box.addView(title);ImageView image=new ImageView(this);image.setImageBitmap(qr);int size=Math.min(getResources().getDisplayMetrics().widthPixels,getResources().getDisplayMetrics().heightPixels)/2;LinearLayout.LayoutParams lp=new LinearLayout.LayoutParams(size,size);lp.setMargins(0,18,0,18);box.addView(image,lp);TextView label=new TextView(this);label.setText(code+"\nCódigo válido por 10 minutos");label.setTextSize(20);label.setGravity(Gravity.CENTER);label.setTextColor(Color.rgb(177,237,137));box.addView(label);Button setup=new Button(this);setup.setText("Configurar inicio automático");setup.setOnClickListener(v->startupSettings());box.addView(setup);TextView ver=new TextView(this);ver.setText("v"+BuildConfig.VERSION_NAME);ver.setTextColor(Color.rgb(110,120,130));ver.setTextSize(11);ver.setGravity(Gravity.CENTER);ver.setPadding(0,18,0,0);box.addView(ver);}
  private void startupSettings(){
   new AlertDialog.Builder(this).setTitle("Inicio automático")
-   .setMessage("Para una pantalla dedicada, selecciona VenuePro Signage como aplicación de inicio predeterminada. Al encender y desbloquear Android, volverá al reproductor. Puedes cambiarlo después en Ajustes → Aplicaciones → Aplicaciones predeterminadas → Inicio. Algunos fabricantes no permiten cambiar el inicio.")
+   .setMessage("Para una pantalla dedicada, selecciona MoTV Signage como aplicación de inicio predeterminada. Al encender y desbloquear Android, volverá al reproductor. Puedes cambiarlo después en Ajustes → Aplicaciones → Aplicaciones predeterminadas → Inicio. Algunos fabricantes no permiten cambiar el inicio.")
    .setPositiveButton("Elegir app de inicio",(dialog,which)->{try{startActivity(new Intent(Settings.ACTION_HOME_SETTINGS));}catch(RuntimeException error){Toast.makeText(this,"Configura la aplicación de inicio desde los ajustes del equipo",Toast.LENGTH_LONG).show();}})
    .setNegativeButton("Volver",null).show();
  }

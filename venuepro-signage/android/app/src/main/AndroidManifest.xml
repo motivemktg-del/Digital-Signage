@@ -9,7 +9,7 @@
       IP privada, nunca sale a internet. Las llamadas a la API real
       (SERVER en MainActivity.java) siguen forzadas a HTTPS ahí mismo,
       esto solo afecta al WebView de la fuente en vivo. -->
- <application android:label="VenuePro Signage" android:theme="@android:style/Theme.Material.NoActionBar" android:allowBackup="false" android:dataExtractionRules="@xml/data_extraction_rules" android:fullBackupContent="@xml/backup_rules" android:usesCleartextTraffic="true" android:banner="@drawable/banner" android:icon="@drawable/banner" android:supportsRtl="true">
+ <application android:label="MoTV Signage" android:theme="@android:style/Theme.Material.NoActionBar" android:allowBackup="false" android:dataExtractionRules="@xml/data_extraction_rules" android:fullBackupContent="@xml/backup_rules" android:usesCleartextTraffic="true" android:banner="@drawable/banner" android:icon="@drawable/banner" android:supportsRtl="true">
   <activity android:name=".MainActivity" android:launchMode="singleTask" android:exported="true" android:configChanges="orientation|screenSize|keyboardHidden">
    <intent-filter><action android:name="android.intent.action.MAIN"/><category android:name="android.intent.category.LAUNCHER"/><category android:name="android.intent.category.LEANBACK_LAUNCHER"/></intent-filter>
    <intent-filter><action android:name="android.intent.action.MAIN"/><category android:name="android.intent.category.HOME"/><category android:name="android.intent.category.DEFAULT"/></intent-filter>

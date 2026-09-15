@@ -2,7 +2,12 @@ plugins { id 'com.android.application' }
 android {
  namespace 'cloud.venueprocrm.signage'
  compileSdk 35
- defaultConfig { applicationId 'cloud.venueprocrm.signage'; minSdk 26; targetSdk 35; versionCode 3; versionName '0.3.0' }
+ // Subir versionCode +1 en CADA build que se instale en una TV (aunque
+ // versionName no cambie) — Android usa SOLO versionCode para decidir si
+ // "hay algo nuevo que instalar" al reinstalar sobre una versión previa
+ // con la misma firma; versionName es la que se ve en pantalla (ver
+ // MainActivity.message()/showPair()).
+ defaultConfig { applicationId 'cloud.venueprocrm.signage'; minSdk 26; targetSdk 35; versionCode 4; versionName '0.4.0' }
  compileOptions { sourceCompatibility JavaVersion.VERSION_17; targetCompatibility JavaVersion.VERSION_17 }
 }
 // ExoPlayer+RTSP: reproduce la señal en vivo casi en tiempo real (sin el

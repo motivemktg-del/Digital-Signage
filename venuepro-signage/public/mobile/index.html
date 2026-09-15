@@ -12,9 +12,12 @@
 </head>
 <body>
 <div id="app"></div>
-<!-- lo sirve el propio backend (server.js) para leer QR con la cámara -->
+<!-- lo sirve el propio backend (server.js) para leer QR con la cámara.
+     Los 3 con defer (igual que el panel viejo en /) — mismo orden
+     relativo entre sí, solo que después de parsear todo el HTML en vez
+     de bloquear la carga de la página. -->
 <script src="/vendor/scanner.js" defer></script>
-<script src="js/data.js"></script>
-<script src="js/app.js"></script>
+<script src="js/data.js" defer></script>
+<script src="js/app.js" defer></script>
 </body>
 </html>
