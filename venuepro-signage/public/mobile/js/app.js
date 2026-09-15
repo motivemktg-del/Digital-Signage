@@ -5,7 +5,7 @@
 // Se sube a mano en cada cambio de este archivo — se muestra en Ajustes
 // (viewSettings()) para poder confirmar de un vistazo si el celular ya
 // está corriendo el JS nuevo o todavía sirve una copia vieja de caché.
-const BUILD = '2026-09-15.13';
+const BUILD = '2026-09-15.14';
 
 // El QR de una TV sin emparejar ahora es una URL http(s) de verdad
 // (?pair=CODE, ver /api/pair/start en server.js) — para que la cámara
@@ -530,7 +530,19 @@ const actions = {
     ui.mixTemplateLoadedId = null;
     await run(clearMix(ui.mixDeviceId), 'Mezcla quitada');
   },
+  // Si hay una plantilla CARGADA (se tocó su fila, ver applyMixTemplate),
+  // "Guardar como plantilla" actualiza ESA con los ajustes actuales en vez
+  // de crear siempre una nueva — antes SIEMPRE creaba una nueva sin
+  // importar que hubiera una cargada, así que ajustar color/tamaño y tocar
+  // este botón nunca terminaba guardándose de verdad en la plantilla que
+  // se estaba viendo (quedaba en una copia nueva, aparte). Cancelar el
+  // confirm cae al flujo de siempre (crear una nueva con nombre).
   async saveMixTemplateNow() {
+    const loaded = ui.mixTemplateLoadedId && (remote.mixTemplates || []).find(t => t.id === ui.mixTemplateLoadedId);
+    if (loaded && confirm(`¿Actualizar la plantilla "${loaded.name}" con los ajustes actuales?`)) {
+      await run(updateMixTemplate(loaded.id, { name: loaded.name, ...mixDraftPayload(ui.mixDraft) }), 'Plantilla actualizada');
+      return;
+    }
     const name = prompt('Nombre de la plantilla (ej. Happy Hour):'); if (!name) return;
     await run(createMixTemplate({ name, ...mixDraftPayload(ui.mixDraft) }), 'Plantilla guardada');
   },
@@ -1444,7 +1456,7 @@ function viewMix() {
 
       <div class="row" style="justify-content:space-between;align-items:baseline;margin-bottom:9px">
         <div class="eyebrow" style="margin:0">Plantillas</div>
-        <div class="row-tap" style="font:600 11px var(--sans);color:var(--accent)" ${A('saveMixTemplateNow')}>+ Guardar como plantilla</div>
+        <div class="row-tap" style="font:600 11px var(--sans);color:var(--accent)" ${A('saveMixTemplateNow')}>${ui.mixTemplateLoadedId ? '💾 Actualizar plantilla cargada' : '+ Guardar como plantilla'}</div>
       </div>
       <div class="stack" style="margin-bottom:16px">
         ${templates.length === 0 ? `<div style="padding:10px 0;text-align:center;color:var(--ink-faint);font:400 11px var(--sans)">Sin plantillas guardadas.</div>` : templates.map(t => `
