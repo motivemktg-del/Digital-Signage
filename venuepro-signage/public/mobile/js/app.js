@@ -1046,12 +1046,14 @@ function deviceTile(d, selected) {
   const tapAttrs = selected ? A('assignDeviceToSource', `${d.id}:${selected.kind}:${selected.id}`) : A('openDevice', d.id);
   return `<div class="card row-tap" style="overflow:hidden;position:relative;${active ? 'box-shadow:0 0 0 2px var(--amber)' : ''}" ${tapAttrs} data-longpress="openDevice" data-longpress-arg="${esc(d.id)}">
     ${d.alert ? `<div title="${esc(d.alert.text)}" style="position:absolute;top:4px;right:4px;z-index:1;font-size:11px;line-height:1;filter:drop-shadow(0 1px 2px rgba(0,0,0,.5))">🚨</div>` : ''}
+    ${d.error ? `<div title="${esc(d.error)}" style="position:absolute;top:4px;left:4px;z-index:1;font-size:11px;line-height:1;filter:drop-shadow(0 1px 2px rgba(0,0,0,.5))">⚠️</div>` : ''}
     ${previewThumb(d, firstAsset, firstChannel)}
     <div style="padding:5px 6px 6px">
       <div class="row" style="gap:4px">
         <div class="dot dot-sm" style="background:${STATUS_COLOR[status]}"></div>
         <div style="font:600 10.5px var(--sans);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(d.name)}${d.paused ? ' ⏸' : ''}</div>
       </div>
+      ${d.error ? `<div style="font:400 9px var(--mono);color:var(--red);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;margin-top:2px">${esc(d.error)}</div>` : ''}
     </div>
   </div>`;
 }
