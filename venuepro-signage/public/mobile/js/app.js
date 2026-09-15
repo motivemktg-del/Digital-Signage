@@ -5,7 +5,7 @@
 // Se sube a mano en cada cambio de este archivo — se muestra en Ajustes
 // (viewSettings()) para poder confirmar de un vistazo si el celular ya
 // está corriendo el JS nuevo o todavía sirve una copia vieja de caché.
-const BUILD = '2026-09-15.10';
+const BUILD = '2026-09-15.12';
 
 // El QR de una TV sin emparejar ahora es una URL http(s) de verdad
 // (?pair=CODE, ver /api/pair/start en server.js) — para que la cámara
@@ -1006,6 +1006,7 @@ function viewLocationDetail() {
       <div class="eyebrow">TVs${devices.length ? ' · ' + devices.length : ''}</div>
       ${devices.length === 0 ? emptyState('Sin TVs aquí todavía', 'Empareja una TV y elige esta ubicación, o mueve una existente desde su detalle.') : `<div class="grid-4" style="margin-bottom:20px">${devices.map(d => deviceTile(d, selected)).join('')}</div>`}
     </div>
+    ${tabbar()}
     ${ui.detailDeviceId ? deviceSheet() : ''}
     ${ui.ptzCameraDraft ? ptzCameraEditor(ui.ptzCameraDraft) : ''}
     ${toastHtml()}
@@ -1151,6 +1152,7 @@ function viewPtz() {
       <div class="btn btn-primary row-tap" style="margin-top:14px" ${A('sendPtzToScreensNow')}>Enviar a las TVs</div>
       ${!cam.view_url ? `<div style="font:400 10px var(--mono);color:var(--ink-faint);text-align:center;margin-top:6px">Falta configurar la URL de video de esta cámara</div>` : ''}
     </div>
+    ${tabbar()}
     ${toastHtml()}
   </div>`;
 }
@@ -1449,6 +1451,7 @@ function viewMix() {
         </div>`).join('')}
       </div>
     </div>
+    ${tabbar()}
     ${ui.mixTemplateDraft ? mixTemplateEditor(ui.mixTemplateDraft) : ''}
     ${toastHtml()}
   </div>`;
@@ -1601,6 +1604,7 @@ function viewPair() {
         </div>
       </form>`}
     </div>
+    ${tabbar()}
     ${ui.locationDraft ? locationEditor(ui.locationDraft) : ''}
     ${toastHtml()}
   </div>`;
@@ -1819,6 +1823,7 @@ function viewAssetFolder() {
         ${items.length === 0 ? `<div style="grid-column:1/-1;padding:24px 0;text-align:center;color:var(--ink-faint);font:400 12px var(--sans)">Carpeta vacía — agrega archivos arriba.</div>` : items.map(assetCard).join('')}
       </div>
     </div>
+    ${tabbar()}
     ${assetPreviewOverlay()}
     ${toastHtml()}
   </div>`;
@@ -1927,6 +1932,7 @@ function viewStudio() {
         : !c.enabled || !c.verified ? studioConfigPrompt(c)
         : studioDraftsList(c)}
     </div>
+    ${tabbar()}
     ${toastHtml()}
   </div>`;
 }
@@ -2020,6 +2026,7 @@ function viewStudioDraft() {
       ${canGenerate ? `<div class="btn btn-primary row-tap" ${A('generateStudioNow')}>Generar fondo con IA</div>` : `<div style="font:400 11px var(--sans);color:var(--ink-faint);text-align:center">${!c || !c.enabled || !c.verified ? 'Configura y verifica Estudio IA primero.' : 'Cupo mensual agotado.'}</div>`}
       ${dangerLink('Eliminar borrador', 'deleteStudioDraftFromEditor')}
     </div>
+    ${tabbar()}
     ${toastHtml()}
   </div>`;
 }
@@ -2087,6 +2094,7 @@ function viewTeam() {
         </div>`).join('') || `<div style="padding:16px 0;text-align:center;color:var(--ink-faint);font:400 12px var(--sans)">Cargando…</div>`}
       </div>`}
     </div>
+    ${tabbar()}
     ${toastHtml()}
   </div>`;
 }
@@ -2118,6 +2126,7 @@ function viewSettings() {
       <div style="font:400 9px var(--mono);color:var(--ink-faint);margin-top:4px;text-align:center;opacity:.6">panel build ${BUILD}</div>
       <div class="row-tap" style="text-align:center;margin-top:14px;font:600 12px var(--sans);color:var(--red)" ${A('logoutNow')}>Cerrar sesión</div>
     </div>
+    ${tabbar()}
     ${toastHtml()}
   </div>`;
 }
@@ -2136,6 +2145,19 @@ function render() {
   if (ui.authed === null) { app.innerHTML = `<div class="screen" style="align-items:center;justify-content:center"><div style="color:var(--ink-faint);font:400 12.5px var(--sans)">Cargando…</div></div>`; return; }
   if (!ui.authed) { app.innerHTML = viewLogin(); return; }
   usersCache = usersCache; // no-op, mantiene el caché entre renders
+  // Cada render() reescribe TODO el HTML con innerHTML= — sin esto, un
+  // <video>/<img> de fuente en vivo que ya está conectado (WebRTC negociado,
+  // o ya cayó al snapshot) se recreaba de cero en cada uno, así la fuente
+  // mostrada fuera exactamente la misma (tocar cualquier botón, elegir
+  // cualquier TV) — se veía como un parpadeo/reconexión constante. Acá se
+  // sacan del árbol ANTES de reescribir #app (se identifican por su mp4Src,
+  // única por canal/TV) y se devuelven a su lugar después si el HTML nuevo
+  // pide esa MISMA fuente — sin tocar la conexión para nada. Es sincrónico
+  // (sin await de por medio), así que el navegador nunca llega a pintar un
+  // cuadro con el video realmente desconectado del documento.
+  const preserved = new Map();
+  app.querySelectorAll('[data-mp4-src]').forEach(el => { if (el._settled) preserved.set(el.dataset.mp4Src, el); });
+  preserved.forEach(el => el.remove());
   switch (ui.route) {
     case 'playlists': app.innerHTML = viewPlaylists(); break;
     case 'content': app.innerHTML = viewContent(); break;
@@ -2152,6 +2174,11 @@ function render() {
     default: app.innerHTML = viewHome();
   }
   sheetEntering = false;
+  app.querySelectorAll('[data-mp4-src]').forEach(placeholder => {
+    const old = preserved.get(placeholder.dataset.mp4Src);
+    if (old) { placeholder.replaceWith(old); preserved.delete(placeholder.dataset.mp4Src); }
+  });
+  preserved.forEach(teardownLiveEl); // ya no se usan en ningún lado de este render — ahí sí se cierran de verdad
   wireLiveFeedFallbacks();
 }
 
@@ -2170,11 +2197,17 @@ function render() {
 // verdad. Por eso, además del error explícito, si a los 4s no arrancó a
 // reproducir de verdad (sigue en pausa y en el segundo 0), lo tratamos
 // igual que un error y pasamos a la foto.
-let snapshotTimers = [];
-// PeerConnections de WebRTC abiertas por el render actual — hay que
-// cerrarlas explícitamente en cada render() (innerHTML= tira el <video>
-// pero no cierra solo la conexión) para no dejar conexiones fantasma.
-let activePeerConnections = [];
+//
+// El PC/timer de cada elemento vive COLGADO DEL ELEMENTO MISMO (._pc,
+// ._snapshotTimer), no en un array compartido — así render() puede cerrar
+// solo los de un elemento puntual (teardownLiveEl) cuando de verdad ya no
+// se usa en ningún lado, en vez de la lógica vieja de "cerrar TODO en cada
+// render()", que es justo lo que forzaba reconectar la señal en vivo cada
+// vez que se tocaba cualquier botón (parpadeo real, no cosmético).
+function teardownLiveEl(el) {
+  if (el._pc) { try { el._pc.close(); } catch { } el._pc = null; }
+  if (el._snapshotTimer) { clearInterval(el._snapshotTimer); el._snapshotTimer = null; }
+}
 function startMp4WithSnapshotFallback(video) {
   let swapped = false;
   const toSnapshot = () => {
@@ -2182,10 +2215,12 @@ function startMp4WithSnapshotFallback(video) {
     const img = document.createElement('img');
     img.setAttribute('style', video.getAttribute('style') || '');
     img.alt = 'señal en vivo';
+    img.dataset.mp4Src = video.dataset.mp4Src || ''; // conserva la key para poder preservarlo en el próximo render()
+    img._settled = true;
     const base = video.dataset.snapshotSrc;
     const refresh = () => { img.src = base + (base.includes('?') ? '&' : '?') + 't=' + Date.now(); };
     refresh();
-    snapshotTimers.push(setInterval(refresh, 1500));
+    img._snapshotTimer = setInterval(refresh, 1500);
     video.replaceWith(img);
   };
   video.addEventListener('error', toSnapshot, { once: true });
@@ -2204,7 +2239,7 @@ async function tryWebrtcThenFallback(video) {
   if (typeof RTCPeerConnection === 'undefined') return startMp4WithSnapshotFallback(video);
   try {
     const pc = new RTCPeerConnection();
-    activePeerConnections.push(pc);
+    video._pc = pc;
     pc.addTransceiver('video', { direction: 'recvonly' });
     pc.ontrack = e => { video.srcObject = e.streams[0]; };
     const offer = await pc.createOffer();
@@ -2220,16 +2255,17 @@ async function tryWebrtcThenFallback(video) {
       });
     });
   } catch (e) {
+    if (video._pc) { try { video._pc.close(); } catch { } video._pc = null; }
     if (video.isConnected) startMp4WithSnapshotFallback(video);
   }
 }
+// Solo conecta lo que todavía NO tiene conexión propia (._settled) — un
+// elemento PRESERVADO entre renders (ver render()) sigue matcheando estos
+// mismos selectores, pero ya está conectado, así que no hay que tocarlo de
+// nuevo.
 function wireLiveFeedFallbacks() {
-  snapshotTimers.forEach(t => clearInterval(t));
-  snapshotTimers = [];
-  activePeerConnections.forEach(pc => pc.close());
-  activePeerConnections = [];
-  document.querySelectorAll('video[data-webrtc-offer]').forEach(tryWebrtcThenFallback);
-  document.querySelectorAll('video[data-snapshot-src]:not([data-webrtc-offer])').forEach(startMp4WithSnapshotFallback);
+  document.querySelectorAll('video[data-webrtc-offer]').forEach(v => { if (v._settled) return; v._settled = true; tryWebrtcThenFallback(v); });
+  document.querySelectorAll('video[data-snapshot-src]:not([data-webrtc-offer])').forEach(v => { if (v._settled) return; v._settled = true; startMp4WithSnapshotFallback(v); });
 }
 
 // El panel NO se refresca solo — remote solo se actualiza cuando el
