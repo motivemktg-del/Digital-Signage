@@ -5,7 +5,7 @@
 // Se sube a mano en cada cambio de este archivo — se muestra en Ajustes
 // (viewSettings()) para poder confirmar de un vistazo si el celular ya
 // está corriendo el JS nuevo o todavía sirve una copia vieja de caché.
-const BUILD = '2026-09-15.5';
+const BUILD = '2026-09-15.6';
 
 // El QR de una TV sin emparejar ahora es una URL http(s) de verdad
 // (?pair=CODE, ver /api/pair/start en server.js) — para que la cámara
@@ -34,6 +34,12 @@ const ui = {
   // ubicación no tiene entrada acá todavía, se usa su primera fuente
   // disponible (canal antes que lista) como default.
   locationSource: {},
+  // { [deviceId]: "playlist:ID"|"template:ID" } — qué se está mirando en el
+  // selector "Lista de reproducción" de la ficha de cada TV (deviceSheet).
+  // Igual que locationSource: solo decide qué se VE en el selector y qué
+  // control aparece al lado (Asignar vs el switch de plantilla); no actúa
+  // sobre la TV hasta tocar ese control.
+  devicePlaylistPick: {},
   // Id de la TV marcada para Mezclar (borde amarillo) — tocar una TV que YA
   // es la fuente activa (borde verde) no la reasigna (sería un no-op) ni la
   // apaga (nunca), la marca/desmarca para esto en su lugar. Sirve para
@@ -169,9 +175,32 @@ const actions = {
     if (!confirm('¿Quitar esta TV? Tendrás que emparejarla de nuevo.')) return;
     ui.detailDeviceId = null; await run(revokeDevice(id), 'TV eliminada');
   },
-  async assignPlaylistTo(id, select) {
-    const sel = select.closest('.row').querySelector('select');
-    await run(assignPlaylist(id, sel.value), 'Lista asignada');
+  // El selector "Lista de reproducción" de la ficha ahora también lista
+  // plantillas de mezcla guardadas — el valor viaja como "playlist:ID" o
+  // "template:ID" (mismo patrón que sourceOptions en la vista de Fuente)
+  // para no confundir ambos espacios de ids. Solo cambia qué se VE
+  // seleccionado y qué control aparece al lado; no asigna nada todavía.
+  setDevicePlaylistPick(deviceId, select) { ui.devicePlaylistPick[deviceId] = select.value; render(); },
+  async assignPlaylistTo(id) {
+    const [, playlistId] = (ui.devicePlaylistPick[id] || '').split(':');
+    if (!playlistId) return;
+    await run(assignPlaylist(id, playlistId), 'Lista asignada');
+  },
+  // Plantilla elegida en ese mismo selector: en vez de "Asignar" (una
+  // acción de un solo sentido), es un booleano — actívala o quítala de
+  // esta TV puntual. "Ya activada" se decide comparando el mix actual de
+  // la TV contra la plantilla (ver deviceMixMatchesTemplate) porque el mix
+  // no guarda de qué plantilla salió, solo sus valores.
+  async toggleMixTemplateOnDevice(arg) {
+    const [deviceId, templateId] = arg.split(':');
+    const d = remote.devices.find(x => x.id === deviceId);
+    const t = (remote.mixTemplates || []).find(x => x.id === templateId);
+    if (!d || !t) return;
+    if (deviceMixMatchesTemplate(d, t)) {
+      await run(setMix(deviceId, { clear: true }), 'Mezcla quitada');
+    } else {
+      await run(setMix(deviceId, { layout: t.layout, promo: t.promo, logo: t.logo, text: t.text, muted: !!t.muted, style: t.style }), `Plantilla "${t.name}" activada`);
+    }
   },
   async setDisplayOpt(id, el) {
     const wrap = el.closest('[data-display-form]');
@@ -1219,6 +1248,17 @@ function mixDraftPayload(d) {
   const { layout, promo, logo, text, muted, stripeColor, textColor, fontSize, thickness, fadeMs } = d;
   return { layout, promo, logo, text, muted, style: { stripeColor, textColor, fontSize, thickness, fadeMs } };
 }
+// ¿El mix ACTUAL de esta TV (d.mix, flat) es exactamente el de esta
+// plantilla (t.style, anidado)? El mix no guarda de qué plantilla salió,
+// solo sus valores — así que "¿ya está activada?" se decide comparando
+// campo por campo, incluyendo tamaño de letra y color de fondo (stripeColor)
+// que sí viajan completos desde saveMixTemplateNow()/mixDraftPayload().
+function deviceMixMatchesTemplate(d, t) {
+  if (!d.mix || !t) return false;
+  const m = d.mix, s = t.style || {};
+  return m.layout === t.layout && m.promo === t.promo && m.logo === t.logo && m.text === t.text && !!m.muted === !!t.muted &&
+    m.stripeColor === s.stripeColor && m.textColor === s.textColor && m.fontSize === s.fontSize && m.thickness === s.thickness && m.fadeMs === s.fadeMs;
+}
 
 // Overlay visual de la mezcla (layout+logo+texto+estilo) — se dibuja EN EL
 // PANEL con CSS puro sobre la señal en vivo; el reproductor real compone
@@ -1446,13 +1486,31 @@ function deviceSheet() {
     </div>` : ''}
     ${d.location && remote.ptzCameras.some(c => c.location === d.location) ? `<div class="row-tap" style="text-align:center;padding:10px 0;border-radius:6px;background:var(--card-2);border:1px solid var(--line);font:600 12px var(--sans);margin-bottom:16px" ${A('openPtzFromDevice', d.id)}>📹 Control PTZ</div>` : ''}
 
-    <div class="eyebrow">Lista de reproducción</div>
-    <div class="row" style="gap:8px;margin-bottom:16px">
-      <select style="flex:1;padding:11px;border-radius:6px;background:var(--card-2);border:1px solid var(--line);color:var(--ink)">
-        ${remote.playlists.map(p => `<option value="${esc(p.id)}" ${p.id === d.playlist ? 'selected' : ''}>${esc(p.name)}</option>`).join('')}
-      </select>
-      <div class="btn btn-primary row-tap" style="padding:11px 16px;font-size:13px" ${A('assignPlaylistTo', d.id)}>Asignar</div>
-    </div>
+    ${(() => {
+      // El selector incluye también las plantillas de mezcla guardadas
+      // (pedido explícito) — value="playlist:ID" o "template:ID" para no
+      // mezclar los dos espacios de ids. Por defecto muestra lo que de
+      // verdad está pasando en la TV: la plantilla activa si el mix actual
+      // coincide con alguna (ver deviceMixMatchesTemplate), si no la lista
+      // asignada.
+      const templates = remote.mixTemplates || [];
+      const activeTemplate = templates.find(t => deviceMixMatchesTemplate(d, t));
+      const pick = ui.devicePlaylistPick[d.id] || (activeTemplate ? `template:${activeTemplate.id}` : `playlist:${d.playlist || ''}`);
+      const [pickKind, pickId] = pick.split(':');
+      const pickedTemplate = pickKind === 'template' ? templates.find(t => t.id === pickId) : null;
+      return `<div class="eyebrow">Lista de reproducción</div>
+      <div class="row" style="gap:8px;margin-bottom:16px">
+        <select data-change="setDevicePlaylistPick" data-arg="${esc(d.id)}" style="flex:1;padding:11px;border-radius:6px;background:var(--card-2);border:1px solid var(--line);color:var(--ink)">
+          <optgroup label="Listas de reproducción">${remote.playlists.map(p => `<option value="playlist:${esc(p.id)}" ${pick === `playlist:${p.id}` ? 'selected' : ''}>${esc(p.name)}</option>`).join('')}</optgroup>
+          ${templates.length ? `<optgroup label="Plantillas de mezcla">${templates.map(t => `<option value="template:${esc(t.id)}" ${pick === `template:${t.id}` ? 'selected' : ''}>${esc(t.name)}</option>`).join('')}</optgroup>` : ''}
+        </select>
+        ${pickedTemplate
+          ? `<div class="row-tap" title="${deviceMixMatchesTemplate(d, pickedTemplate) ? 'Quitar de esta TV' : 'Activar en esta TV'}" style="width:44px;height:26px;border-radius:6px;background:${deviceMixMatchesTemplate(d, pickedTemplate) ? 'var(--accent)' : 'var(--card-2)'};border:1px solid var(--line);position:relative;flex:none;transition:background .15s" ${A('toggleMixTemplateOnDevice', `${d.id}:${pickedTemplate.id}`)}>
+              <div style="position:absolute;top:2px;left:${deviceMixMatchesTemplate(d, pickedTemplate) ? '20px' : '2px'};width:20px;height:20px;border-radius:50%;background:#fff;transition:left .15s;box-shadow:0 1px 3px rgba(0,0,0,.3)"></div>
+            </div>`
+          : `<div class="btn btn-primary row-tap" style="padding:11px 16px;font-size:13px" ${A('assignPlaylistTo', d.id)}>Asignar</div>`}
+      </div>`;
+    })()}
 
     ${(() => {
       const loc = remote.locations.find(l => l.id === d.location);
