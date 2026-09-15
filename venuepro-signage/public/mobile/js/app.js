@@ -5,7 +5,7 @@
 // Se sube a mano en cada cambio de este archivo — se muestra en Ajustes
 // (viewSettings()) para poder confirmar de un vistazo si el celular ya
 // está corriendo el JS nuevo o todavía sirve una copia vieja de caché.
-const BUILD = '2026-09-15.12';
+const BUILD = '2026-09-15.13';
 
 // El QR de una TV sin emparejar ahora es una URL http(s) de verdad
 // (?pair=CODE, ver /api/pair/start en server.js) — para que la cámara
@@ -559,6 +559,11 @@ const actions = {
     const t = (remote.mixTemplates || []).find(x => x.id === templateId);
     const d = remote.devices.find(x => x.id === deviceId);
     if (!t || !d) return;
+    // La mezcla se dibuja SOBRE la señal en vivo — sin eso el servidor
+    // rechaza la activación (409) y el booleano se queda apagado sin que
+    // se note por qué. Se avisa acá mismo, de una, en vez de esperar el
+    // viaje al servidor para enterarse.
+    if (!d.liveSource) return showToast('Activa una señal en vivo primero para poder mezclar', true);
     if (deviceMixMatchesTemplate(d, t)) {
       await run(setMix(deviceId, { clear: true }), 'Plantilla quitada');
     } else {
@@ -1529,10 +1534,11 @@ function deviceSheet() {
         <select data-change="setDeviceTemplatePick" data-arg="${esc(d.id)}" style="flex:1;padding:11px;border-radius:6px;background:var(--card-2);border:1px solid var(--line);color:var(--ink)">
           ${templates.map(t => `<option value="${esc(t.id)}" ${t.id === picked.id ? 'selected' : ''}>${esc(t.name)}</option>`).join('')}
         </select>
-        <div class="row-tap" title="${on ? 'Quitar de esta TV' : 'Activar en esta TV'}" style="width:44px;height:26px;border-radius:6px;background:${on ? 'var(--purple)' : 'var(--card-2)'};border:1px solid var(--line);position:relative;flex:none;transition:background .15s" ${A('toggleMixTemplateOnDevice', `${d.id}:${picked.id}`)}>
+        <div class="row-tap" title="${on ? 'Quitar de esta TV' : 'Activar en esta TV'}" style="width:44px;height:26px;border-radius:6px;background:${on ? 'var(--purple)' : 'var(--card-2)'};border:1px solid var(--line);position:relative;flex:none;transition:background .15s;opacity:${d.liveSource ? '1' : '.5'}" ${A('toggleMixTemplateOnDevice', `${d.id}:${picked.id}`)}>
           <div style="position:absolute;top:2px;left:${on ? '20px' : '2px'};width:20px;height:20px;border-radius:50%;background:#fff;transition:left .15s;box-shadow:0 1px 3px rgba(0,0,0,.3)"></div>
         </div>
-      </div>`;
+      </div>
+      ${!d.liveSource ? `<div style="font:400 10.5px var(--mono);color:var(--ink-dimmer);margin-top:-8px;margin-bottom:16px">Activa una señal en vivo primero — la mezcla se dibuja sobre el video en vivo.</div>` : ''}`;
     })()}
     ${d.alert ? `<div class="row" style="gap:8px;padding:9px 12px;border-radius:6px;background:rgba(242,99,90,.1);border:1px solid rgba(242,99,90,.3);margin-bottom:12px">
       <div style="flex:1;min-width:0"><div style="font:600 11.5px var(--sans);color:var(--red)">${esc(d.alert.text)}</div><div style="font:400 9.5px var(--mono);color:var(--ink-dimmer)">${{ info: 'informativa', warning: 'advertencia', critical: 'crítica' }[d.alert.level] || d.alert.level}</div></div>
