@@ -5,7 +5,7 @@
 // Se sube a mano en cada cambio de este archivo — se muestra en Ajustes
 // (viewSettings()) para poder confirmar de un vistazo si el celular ya
 // está corriendo el JS nuevo o todavía sirve una copia vieja de caché.
-const BUILD = '2026-09-15.9';
+const BUILD = '2026-09-15.10';
 
 // El QR de una TV sin emparejar ahora es una URL http(s) de verdad
 // (?pair=CODE, ver /api/pair/start en server.js) — para que la cámara
@@ -986,8 +986,21 @@ function viewLocationDetail() {
   // "Activa" para un canal = esta TV lo tiene prendido. Para una lista =
   // esta TV la está mostrando DE VERDAD (sin un canal encima tapándola).
   const activeCount = !selected ? 0 : devices.filter(d => selected.kind === 'channel' ? d.liveChannel === selected.id : (!d.liveChannel && d.playlist === selected.id)).length;
+  // El nombre de la ubicación se quita del topbar — "Fuente" + el badge
+  // EN DIRECTO ocupan ese espacio en su lugar (lo que importa acá es qué
+  // se está mirando, no el nombre, que ya se ve en el tab de Ubicaciones).
+  // El ícono de salida (🚪) a la derecha es una segunda forma de volver a
+  // Home además de "‹" — misma acción, más fácil de alcanzar desde el otro
+  // lado de una tablet grande.
   return `<div class="screen">
-    <div class="topbar"><div class="back" ${A('goTab', 'home')}>‹</div><div class="title">${esc(loc.name)}</div></div>
+    <div class="topbar" style="justify-content:space-between">
+      <div class="row" style="gap:8px;align-items:center;flex:1;min-width:0">
+        <div class="back" ${A('goTab', 'home')}>‹</div>
+        <div class="eyebrow" style="margin:0">Fuente</div>
+        ${selected && selected.kind === 'channel' ? `<div class="badge-live" style="position:static"><div class="dot dot-sm" style="background:var(--red)"></div><span>EN DIRECTO</span></div>` : ''}
+      </div>
+      <div class="row-tap" title="Salir" style="font-size:18px;line-height:1;flex:none" ${A('goTab', 'home')}>🚪</div>
+    </div>
     <div class="content">
       ${locationSourceBlock(locationKey, sourceOptions, selected, activeCount)}
       <div class="eyebrow">TVs${devices.length ? ' · ' + devices.length : ''}</div>
@@ -1008,12 +1021,10 @@ function viewLocationDetail() {
 // hay que tocarla en la grilla. "Mezclar" solo aplica a canales en vivo
 // (el mix necesita señal en vivo real) — se oculta con una lista elegida.
 function locationSourceBlock(locationKey, sourceOptions, selected, activeCount) {
-  const box = 'width:100%;aspect-ratio:16/9;border-radius:6px;overflow:hidden;background:repeating-linear-gradient(135deg,#242830 0 7px,#1c1f25 7px 14px);display:flex;align-items:center;justify-content:center;margin-bottom:14px;position:relative';
-  return `<div class="row" style="gap:8px;align-items:center;margin-bottom:8px">
-    <div class="eyebrow" style="margin:0">Fuente</div>
-    ${selected && selected.kind === 'channel' ? `<div class="badge-live" style="position:static"><div class="dot dot-sm" style="background:var(--red)"></div><span>EN DIRECTO</span></div>` : ''}
-  </div>
-  <div style="${box}">${sourcePreviewHtml(selected)}</div>
+  const box = 'width:100%;aspect-ratio:16/9;border-radius:6px;overflow:hidden;background:repeating-linear-gradient(135deg,#242830 0 7px,#1c1f25 7px 14px);display:flex;align-items:center;justify-content:center;margin-bottom:14px;position:relative;margin-top:8px';
+  // El eyebrow "Fuente" + el badge EN DIRECTO ya se muestran en el topbar
+  // (ver viewLocationDetail) — acá solo va el preview y el selector.
+  return `<div style="${box}">${sourcePreviewHtml(selected)}</div>
   ${sourceOptions.length === 0 ? `<div class="row card-flat row-tap" style="padding:11px 14px;opacity:.6;margin-bottom:16px" ${A('goTab', 'content')}>
     <div style="flex:1;min-width:0"><div style="font:600 12.5px var(--sans);margin-bottom:2px">Sin fuentes todavía</div><div style="font:400 10.5px var(--mono);color:var(--ink-dimmer)">crea un canal en Contenido, o una lista en Listas</div></div>
   </div>` : `<div class="row" style="gap:8px;margin-bottom:6px">
