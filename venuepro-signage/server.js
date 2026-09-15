@@ -702,7 +702,14 @@ export function createApp(env = process.env, studioOptions = {}) {
  app.locals.readPreview=(tenant,id)=>readAsset(tenant,id,20*1024*1024);
  installStudio(app,{db,env,admin,wrap,readAsset,saveImage,streamAsset,managed,...studioOptions});
  app.get('/vendor/scanner.js',(req,res)=>res.sendFile(join(here,'node_modules/html5-qrcode/html5-qrcode.min.js')));
- app.use(express.static(join(here,'public')));
+ // no-cache (no "no-store"): el navegador SIGUE guardando el archivo,
+ // pero está obligado a revalidar con el servidor (If-None-Match/ETag)
+ // antes de usarlo — así un 304 sigue siendo barato, pero nunca sirve una
+ // versión vieja de app.js/styles.css sin preguntar primero. Sin esto,
+ // Safari en iOS (sobre todo si el panel se agregó a la pantalla de
+ // inicio) puede quedarse sirviendo JS viejo de caché por días después de
+ // un deploy, sin ningún aviso — pasó justo en esta investigación.
+ app.use(express.static(join(here,'public'),{setHeaders:res=>res.set('Cache-Control','no-cache')}));
  app.use((err,req,res,next)=>{if(res.headersSent)return next(err);res.status(err.status||500).json({error:err.status?err.message:'No se pudo completar la operación.'});});
  return {app,db};
 }
