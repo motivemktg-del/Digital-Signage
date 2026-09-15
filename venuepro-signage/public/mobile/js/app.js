@@ -5,7 +5,7 @@
 // Se sube a mano en cada cambio de este archivo — se muestra en Ajustes
 // (viewSettings()) para poder confirmar de un vistazo si el celular ya
 // está corriendo el JS nuevo o todavía sirve una copia vieja de caché.
-const BUILD = '2026-09-15.1';
+const BUILD = '2026-09-15.2';
 
 // El QR de una TV sin emparejar ahora es una URL http(s) de verdad
 // (?pair=CODE, ver /api/pair/start en server.js) — para que la cámara
@@ -86,6 +86,17 @@ function dangerLink(label, action, arg) {
   return `<div class="row-tap" style="text-align:center;padding:12px 0;margin-top:14px;font:600 12px var(--sans);color:var(--red)" ${A(action, arg)}>${esc(label)}</div>`;
 }
 function fmtTime(ms) { if (!ms) return 'nunca'; const s = Math.round((Date.now() - ms) / 1000); if (s < 60) return `hace ${s}s`; if (s < 3600) return `hace ${Math.round(s / 60)}m`; return `hace ${Math.round(s / 3600)}h`; }
+// Botón "Mezclar" — píldora oscura con borde degradado azul→violeta (pedido
+// explícito, referencia visual tipo "Web console" de otros paneles). El
+// truco del borde degradado es doble capa de background (padding-box para
+// el relleno, border-box para el degradado) en vez de border-image, porque
+// border-image no admite border-radius — así el máximo de 6px se respeta.
+// "active" (mix ya aplicado) sube la opacidad del degradado para que se
+// note que ya está prendido, en vez de cambiar a un estilo distinto.
+function mixButtonHtml(action, arg, active, compact) {
+  const pad = compact ? '7px 14px' : '9px 16px';
+  return `<div class="row-tap" style="flex:none;display:flex;align-items:center;gap:6px;padding:${pad};border-radius:6px;border:1.5px solid transparent;font:600 12px var(--sans);color:#fff;background:linear-gradient(var(--card-2),var(--card-2)) padding-box,linear-gradient(90deg,#2f7bf6,#a855f7) border-box;opacity:${active ? '1' : '.72'}" ${A(action, arg)}>🎛️ Mezclar</div>`;
+}
 
 function showToast(msg, isError) {
   ui.toast = { msg, isError: !!isError };
@@ -941,7 +952,7 @@ function locationSourceBlock(locationKey, sourceOptions, selected, activeCount) 
       ${sourceOptions.filter(o => o.kind === 'channel').length ? `<optgroup label="Canales en vivo">${sourceOptions.filter(o => o.kind === 'channel').map(o => `<option value="${esc(o.value)}" ${selected.value === o.value ? 'selected' : ''}>${o.label}</option>`).join('')}</optgroup>` : ''}
       ${sourceOptions.filter(o => o.kind === 'playlist').length ? `<optgroup label="Listas de reproducción">${sourceOptions.filter(o => o.kind === 'playlist').map(o => `<option value="${esc(o.value)}" ${selected.value === o.value ? 'selected' : ''}>${o.label}</option>`).join('')}</optgroup>` : ''}
     </select>
-    ${selected.kind === 'channel' ? `<div class="row-tap" style="flex:none;padding:11px 16px;border-radius:6px;background:${activeCount ? 'rgba(47,123,246,.12)' : 'var(--card-2)'};border:1px solid ${activeCount ? 'var(--accent)' : 'var(--line)'};font:600 12px var(--sans)" ${A('openMixForChannel', selected.id)}>🎛️ Mezclar</div>` : ''}
+    ${selected.kind === 'channel' ? mixButtonHtml('openMixForChannel', selected.id, activeCount) : ''}
   </div>
   <div style="font:400 10.5px var(--mono);color:var(--ink-dimmer);margin:0 0 16px">Toca una TV abajo para asignarle esta fuente · ${activeCount} activa${activeCount === 1 ? '' : 's'}</div>`}`;
 }
@@ -1392,7 +1403,7 @@ function deviceSheet() {
           <option value="" ${!d.liveChannel ? 'selected' : ''}>▶ Lista de reproducción${playlist ? ' — ' + esc(playlist.name) : ''}</option>
           ${chans.map(c => `<option value="${esc(c.id)}" ${d.liveChannel === c.id ? 'selected' : ''}>${esc(c.name)}</option>`).join('')}
         </select>
-        ${d.liveSource ? `<div class="row-tap" style="padding:7px 14px;border-radius:6px;flex:none;background:${d.mix ? 'rgba(47,123,246,.12)' : 'var(--card-2)'};border:1px solid ${d.mix ? 'var(--accent)' : 'var(--line)'};font:600 12px var(--sans)" ${A('openMix', d.id)}>🎛️ Mezclar</div>` : ''}
+        ${d.liveSource ? mixButtonHtml('openMix', d.id, d.mix, true) : ''}
         <div class="row-tap" style="padding:7px 14px;border-radius:6px;flex:none;background:${d.alert ? 'rgba(242,99,90,.14)' : 'var(--card-2)'};border:1px solid ${d.alert ? 'var(--red)' : 'var(--line)'};font:600 12px var(--sans)" ${A('sendAlertNow', d.id)}>🚨 Alerta</div>
       </div>
       ${chans.length === 0 ? `<div class="row card-flat row-tap" style="padding:11px 14px;opacity:.6;margin-bottom:16px" ${A('goTab', 'content')}>
