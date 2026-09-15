@@ -2058,4 +2058,20 @@ function wireLiveFeedFallbacks() {
   document.querySelectorAll('video[data-snapshot-src]:not([data-webrtc-offer])').forEach(startMp4WithSnapshotFallback);
 }
 
+// El panel NO se refresca solo — remote solo se actualiza cuando el
+// usuario hace una acción (run() llama refresh() después). Eso significa
+// que un estado que cambia SOLO (una TV que reporta un error nuevo por su
+// cuenta, o cambia a "en vivo"/"apagada" sin que nadie toque nada acá)
+// puede quedar viejo en pantalla indefinidamente. Mientras se está viendo
+// Home o el detalle de una ubicación (las pantallas donde el estado de
+// las TVs realmente importa) se refresca solo cada 4s — nunca mientras
+// haya un editor/ficha abierto encima, para no pisar algo que se esté
+// escribiendo a mitad de camino.
+setInterval(() => {
+  if (ui.authed !== true) return;
+  if (ui.route !== 'home' && ui.route !== 'locationDetail') return;
+  if (ui.locationDraft || ui.detailDeviceId || ui.ptzCameraDraft) return;
+  refresh();
+}, 4000);
+
 refresh();
