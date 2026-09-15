@@ -249,13 +249,22 @@ public class MainActivity extends Activity {
   video.setSurfaceTextureListener(new TextureView.SurfaceTextureListener(){
    public void onSurfaceTextureAvailable(SurfaceTexture texture,int width,int height){
     try{final MediaPlayer player=new MediaPlayer();mediaPlayer=player;Surface surface=new Surface(texture);player.setSurface(surface);surface.release();player.setDataSource(url);
-     player.setOnPreparedListener(mp->{if(mp!=mediaPlayer)return;videoWidth=mp.getVideoWidth();videoHeight=mp.getVideoHeight();layoutDisplay();mp.start();});
+     final boolean[] settled={false};
+     player.setOnPreparedListener(mp->{if(mp!=mediaPlayer||settled[0])return;settled[0]=true;videoWidth=mp.getVideoWidth();videoHeight=mp.getVideoHeight();layoutDisplay();mp.start();});
      player.setOnVideoSizeChangedListener((mp,w,h)->{videoWidth=w;videoHeight=h;layoutDisplay();});
      // Una señal en vivo se puede cortar (cámara/encoder se reinicia, red
      // parpadea) — a diferencia de un video local, aquí sí vale la pena
      // reintentar sola en vez de darse por vencida.
-     player.setOnErrorListener((mp,what,extra)->{lastError="Señal en vivo interrumpida, reintentando…";livePlayingUrl="";ui.postDelayed(()->{if(url.equals(liveSource))playLive(url);},2000);return true;});
+     player.setOnErrorListener((mp,what,extra)->{if(settled[0])return true;settled[0]=true;lastError="Señal en vivo interrumpida, reintentando…";livePlayingUrl="";ui.postDelayed(()->{if(url.equals(liveSource))playLive(url);},2000);return true;});
      player.prepareAsync();
+     // Mismo vigilante que en playNext(): prepareAsync() a veces se cuelga
+     // sin avisar (decodificador de hardware todavía ocupado por lo que se
+     // estaba reproduciendo antes) — sin esto la pantalla queda negra para
+     // siempre en vez de reintentar.
+     ui.postDelayed(()->{
+      if(settled[0]||player!=mediaPlayer)return;settled[0]=true;
+      lastError="La señal en vivo no respondió a tiempo, reintentando…";livePlayingUrl="";ui.postDelayed(()->{if(url.equals(liveSource))playLive(url);},1500);
+     },10000);
     }catch(Exception error){lastError="No se pudo abrir la señal en vivo";livePlayingUrl="";ui.postDelayed(()->{if(url.equals(liveSource))playLive(url);},3000);}
    }
    public void onSurfaceTextureSizeChanged(SurfaceTexture texture,int width,int height){}
@@ -496,9 +505,25 @@ public class MainActivity extends Activity {
     video.setSurfaceTextureListener(new TextureView.SurfaceTextureListener(){
      public void onSurfaceTextureAvailable(SurfaceTexture texture,int width,int height){
       try{final MediaPlayer player=new MediaPlayer();mediaPlayer=player;Surface surface=new Surface(texture);player.setSurface(surface);surface.release();player.setDataSource(file.getAbsolutePath());
-       player.setOnPreparedListener(mp->{if(mp!=mediaPlayer)return;videoWidth=mp.getVideoWidth();videoHeight=mp.getVideoHeight();layoutDisplay();mp.start();});
+       // "settled" evita que el vigilante de abajo actúe si prepareAsync()
+       // SÍ contestó a tiempo (con éxito o error) — y evita al revés que un
+       // onPrepared/onError tardío haga algo después de que el vigilante
+       // ya se dio por vencido y siguió con el próximo item.
+       final boolean[] settled={false};
+       player.setOnPreparedListener(mp->{if(mp!=mediaPlayer||settled[0])return;settled[0]=true;videoWidth=mp.getVideoWidth();videoHeight=mp.getVideoHeight();layoutDisplay();mp.start();});
        player.setOnVideoSizeChangedListener((mp,w,h)->{videoWidth=w;videoHeight=h;layoutDisplay();});
-       player.setOnCompletionListener(mp->playNext());player.setOnErrorListener((mp,what,extra)->{lastError="Video no compatible: "+what;ui.postDelayed(advance,1500);return true;});player.prepareAsync();
+       player.setOnCompletionListener(mp->playNext());
+       player.setOnErrorListener((mp,what,extra)->{if(settled[0])return true;settled[0]=true;lastError="Video no compatible: "+what;ui.postDelayed(advance,1500);return true;});
+       player.prepareAsync();
+       // Vigilante: en algunos Android TV, prepareAsync() se queda colgado
+       // para siempre sin llamar ni a onPrepared ni a onError (típicamente
+       // porque el decodificador de hardware seguía ocupado por la señal
+       // en vivo anterior, apenas soltada) — sin este chequeo, la pantalla
+       // se queda negra de forma PERMANENTE, sin ningún error que avisar.
+       ui.postDelayed(()->{
+        if(settled[0]||player!=mediaPlayer)return;settled[0]=true;
+        lastError="El video no respondió a tiempo, reintentando…";ui.postDelayed(advance,1500);
+       },10000);
       }catch(Exception error){lastError="No se pudo abrir el video";ui.postDelayed(advance,1500);}
      }
      public void onSurfaceTextureSizeChanged(SurfaceTexture texture,int width,int height){}
