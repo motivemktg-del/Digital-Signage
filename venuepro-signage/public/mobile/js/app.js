@@ -5,7 +5,7 @@
 // Se sube a mano en cada cambio de este archivo — se muestra en Ajustes
 // (viewSettings()) para poder confirmar de un vistazo si el celular ya
 // está corriendo el JS nuevo o todavía sirve una copia vieja de caché.
-const BUILD = '2026-09-15.4';
+const BUILD = '2026-09-15.5';
 
 // El QR de una TV sin emparejar ahora es una URL http(s) de verdad
 // (?pair=CODE, ver /api/pair/start en server.js) — para que la cámara
@@ -95,16 +95,20 @@ function dangerLink(label, action, arg) {
   return `<div class="row-tap" style="text-align:center;padding:12px 0;margin-top:14px;font:600 12px var(--sans);color:var(--red)" ${A(action, arg)}>${esc(label)}</div>`;
 }
 function fmtTime(ms) { if (!ms) return 'nunca'; const s = Math.round((Date.now() - ms) / 1000); if (s < 60) return `hace ${s}s`; if (s < 3600) return `hace ${Math.round(s / 60)}m`; return `hace ${Math.round(s / 3600)}h`; }
-// Botón "Mezclar" — píldora oscura con borde degradado azul→violeta (pedido
-// explícito, referencia visual tipo "Web console" de otros paneles). El
-// truco del borde degradado es doble capa de background (padding-box para
-// el relleno, border-box para el degradado) en vez de border-image, porque
-// border-image no admite border-radius — así el máximo de 6px se respeta.
-// "active" (mix ya aplicado) sube la opacidad del degradado para que se
-// note que ya está prendido, en vez de cambiar a un estilo distinto.
+// Botón "Mezclar" — gris neutro (parece deshabilitado) hasta que hay algo
+// puntual que mezclar; ahí se prende con la píldora de borde degradado
+// azul→violeta (pedido explícito, referencia visual tipo "Web console" de
+// otros paneles). El truco del borde degradado es doble capa de background
+// (padding-box para el relleno, border-box para el degradado) en vez de
+// border-image, porque border-image no admite border-radius — así el
+// máximo de 6px se respeta.
+// En locationSourceBlock() "active" es que haya una TV marcada (ver
+// mixTvSelected) — el botón arranca neutro y se prende al tocar una TV. En
+// deviceSheet() sigue siendo "ya existe un mix guardado en esta TV".
 function mixButtonHtml(action, arg, active, compact) {
   const pad = compact ? '7px 14px' : '9px 16px';
-  return `<div class="row-tap" style="flex:none;display:flex;align-items:center;gap:6px;padding:${pad};border-radius:6px;border:1.5px solid transparent;font:600 12px var(--sans);color:#fff;background:linear-gradient(var(--card-2),var(--card-2)) padding-box,linear-gradient(90deg,#2f7bf6,#a855f7) border-box;opacity:${active ? '1' : '.72'}" ${A(action, arg)}>🎛️ Mezclar</div>`;
+  if (!active) return `<div class="row-tap" style="flex:none;display:flex;align-items:center;gap:6px;padding:${pad};border-radius:6px;border:1px solid var(--line);font:600 12px var(--sans);color:var(--ink-dimmer);background:var(--card-2)" ${A(action, arg)}>🎛️ Mezclar</div>`;
+  return `<div class="row-tap" style="flex:none;display:flex;align-items:center;gap:6px;padding:${pad};border-radius:6px;border:1.5px solid transparent;font:600 12px var(--sans);color:#fff;background:linear-gradient(var(--card-2),var(--card-2)) padding-box,linear-gradient(90deg,#2f7bf6,#a855f7) border-box" ${A(action, arg)}>🎛️ Mezclar</div>`;
 }
 
 function showToast(msg, isError) {
@@ -977,7 +981,7 @@ function locationSourceBlock(locationKey, sourceOptions, selected, activeCount) 
       ${sourceOptions.filter(o => o.kind === 'channel').length ? `<optgroup label="Canales en vivo">${sourceOptions.filter(o => o.kind === 'channel').map(o => `<option value="${esc(o.value)}" ${selected.value === o.value ? 'selected' : ''}>${o.label}</option>`).join('')}</optgroup>` : ''}
       ${sourceOptions.filter(o => o.kind === 'playlist').length ? `<optgroup label="Listas de reproducción">${sourceOptions.filter(o => o.kind === 'playlist').map(o => `<option value="${esc(o.value)}" ${selected.value === o.value ? 'selected' : ''}>${o.label}</option>`).join('')}</optgroup>` : ''}
     </select>
-    ${selected.kind === 'channel' ? mixButtonHtml('openMixForChannel', selected.id, activeCount) : ''}
+    ${selected.kind === 'channel' ? mixButtonHtml('openMixForChannel', selected.id, remote.devices.some(x => x.id === ui.mixTvSelected && x.liveChannel === selected.id)) : ''}
   </div>
   <div style="font:400 10.5px var(--mono);color:var(--ink-dimmer);margin:0 0 16px">Toca una TV abajo para asignarle esta fuente · ${activeCount} activa${activeCount === 1 ? '' : 's'}</div>`}`;
 }
